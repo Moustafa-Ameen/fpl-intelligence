@@ -6,7 +6,10 @@ __pycache__/
 *.egg-info/
 
 data/raw/*.json
+data/raw/historical/
 data/processed/*.parquet
 data/processed/*.csv
+
+models/*.joblib
 
 .env

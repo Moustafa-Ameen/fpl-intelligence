@@ -2,6 +2,7 @@ requests
 pandas
 numpy
 scikit-learn
+joblib
 streamlit
 plotly
 pytest
