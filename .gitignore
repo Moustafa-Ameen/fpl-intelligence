@@ -2,14 +2,18 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.playwright-cli/
 *.pyc
 *.egg-info/
 
 data/raw/*.json
 data/raw/historical/
+data/processed/
 data/processed/*.parquet
 data/processed/*.csv
+data/processed/*.txt
 
+models/
 models/*.joblib
 
 .env

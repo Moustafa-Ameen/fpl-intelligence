@@ -1,0 +1,97 @@
+import type {
+  AccuracyResult,
+  BacktestResult,
+  CaptainPick,
+  Fixture,
+  FixtureTick,
+  Player,
+  PlayerHistoryPoint,
+  SquadPlayer,
+  TeamData,
+  Top10Metric,
+  TransferTarget,
+} from "./types";
+
+export const API_BASE = "http://localhost:8000";
+
+async function fetchJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`API request failed: ${path}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function getCurrentGameweek(): Promise<{ current_gw: number | null }> {
+  return fetchJson("/api/fpl/current-gw");
+}
+
+export async function getPlayers(params?: {
+  position?: string;
+  sort_by?: string;
+  limit?: number;
+}): Promise<Player[]> {
+  const search = new URLSearchParams();
+  if (params?.position) search.set("position", params.position);
+  if (params?.sort_by) search.set("sort_by", params.sort_by);
+  if (params?.limit) search.set("limit", String(params.limit));
+  const suffix = search.toString() ? `?${search}` : "";
+  return fetchJson(`/api/players${suffix}`);
+}
+
+export async function getCaptains(): Promise<CaptainPick[]> {
+  return fetchJson("/api/players/captains");
+}
+
+export async function getTransferTargets(): Promise<TransferTarget[]> {
+  return fetchJson("/api/players/transfers");
+}
+
+export async function getDifferentials(): Promise<TransferTarget[]> {
+  return fetchJson("/api/players/differentials");
+}
+
+export async function getFixtureTicker(): Promise<FixtureTick[]> {
+  return fetchJson("/api/fixtures/ticker");
+}
+
+export async function getFixtures(): Promise<Fixture[]> {
+  return fetchJson("/api/fixtures");
+}
+
+export async function getHealth(): Promise<{ status: string }> {
+  return fetchJson("/api/health");
+}
+
+export async function getPlayerHistory(name: string): Promise<PlayerHistoryPoint[]> {
+  return fetchJson(`/api/players/${encodeURIComponent(name)}/history`);
+}
+
+export async function getCaptaincyPredictions(gw?: number): Promise<CaptainPick[]> {
+  const suffix = gw ? `?gw=${gw}` : "";
+  return fetchJson(`/api/predictions/captaincy${suffix}`);
+}
+
+export async function getPredictionTransfers(): Promise<TransferTarget[]> {
+  return fetchJson("/api/predictions/transfers");
+}
+
+export async function getTeam(teamId: string): Promise<TeamData> {
+  return fetchJson(`/api/fpl/team/${teamId}`);
+}
+
+export async function getSquad(teamId: string, gw: number): Promise<SquadPlayer[]> {
+  return fetchJson(`/api/fpl/team/${teamId}/squad?gw=${gw}`);
+}
+
+export async function getAccuracy(): Promise<AccuracyResult[]> {
+  return fetchJson("/api/backtest/accuracy");
+}
+
+export async function getCaptaincyBacktest(): Promise<BacktestResult[]> {
+  return fetchJson("/api/backtest/captaincy");
+}
+
+export async function getTop10Metrics(): Promise<Top10Metric[]> {
+  return fetchJson("/api/backtest/top10");
+}
