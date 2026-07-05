@@ -40,13 +40,13 @@ export default function CaptainPage() {
       <button
         type="button"
         onClick={() => openDrawer(topPick.name)}
-        className="mb-6 min-h-40 w-full rounded-xl border-l-4 border-fpl-gold bg-[linear-gradient(135deg,#240044,#3D0066)] p-6 text-left"
+        className="fpl-card-shadow mb-6 min-h-40 w-full rounded-[10px] border border-fpl-border border-l-4 border-l-fpl-purple bg-fpl-card p-6 text-left"
       >
         <div className="flex items-start justify-between gap-6">
           <div>
             <h2 className="text-[28px] font-bold text-primary">{topPick.name}</h2>
-            <div className="mt-1 text-sm text-muted">{topPick.team}</div>
-            <p className="mt-4 text-sm text-muted">{topPick.reasoning ?? "Strong overall metrics"}</p>
+            <div className="mt-1 text-sm text-secondary">{topPick.team}</div>
+            <p className="mt-4 text-sm text-secondary">{topPick.reasoning ?? "Strong overall metrics"}</p>
           </div>
           <Crown className="h-9 w-9 text-fpl-gold" />
           <div className="text-right">
@@ -67,7 +67,7 @@ export default function CaptainPage() {
               type="button"
               key={player.name}
               onClick={() => openDrawer(player.name)}
-              className="grid w-full grid-cols-[48px_1fr_auto_auto] items-center gap-4 rounded-lg px-4 py-3 text-left odd:bg-fpl-dark/20 hover:bg-fpl-purple/20"
+              className="grid w-full grid-cols-[48px_1fr_auto_auto] items-center gap-4 rounded-lg px-4 py-3 text-left odd:bg-fpl-raised/40 hover:bg-fpl-raised"
             >
               <div className="font-mono text-sm text-muted">
                 {index === 0 ? <Crown className="h-4 w-4 text-fpl-gold" /> : index + 1}
@@ -83,7 +83,7 @@ export default function CaptainPage() {
         </div>
       </Panel>
 
-      <div className="mt-6 rounded-xl border border-fpl-border border-l-fpl-green bg-fpl-card p-5 text-sm italic text-muted">
+      <div className="fpl-card-shadow mt-6 rounded-[10px] border border-fpl-border bg-fpl-card p-5 text-sm italic text-muted">
         How is this calculated? We multiply each player&apos;s predicted points by their probability of
         playing 60+ minutes. This gives you a realistic expected score, not just raw form.
       </div>

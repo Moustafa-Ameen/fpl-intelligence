@@ -40,6 +40,7 @@ export default function StatsPage() {
   const [sortKey, setSortKey] = useState<SortKey>("captain_score");
   const [ascending, setAscending] = useState(false);
   const [page, setPage] = useState(1);
+  const [compactRows, setCompactRows] = useState(false);
 
   useEffect(() => {
     getPlayers({ limit: 1000 })
@@ -48,6 +49,7 @@ export default function StatsPage() {
       .finally(() => setLoading(false));
     queueMicrotask(() => {
       setWatchlist(JSON.parse(window.localStorage.getItem("watchlist") ?? "[]") as string[]);
+      setCompactRows(window.localStorage.getItem("compact_table_rows") === "true");
     });
   }, []);
 
@@ -82,7 +84,7 @@ export default function StatsPage() {
       <SectionHeader title="All Players" />
       <Panel>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex rounded-lg border border-fpl-border bg-fpl-dark p-1">
+          <div className="flex rounded-lg border border-fpl-border bg-fpl-raised p-1">
             <Toggle active={listMode === "all"} onClick={() => setListMode("all")}>
               All Players
             </Toggle>
@@ -90,7 +92,7 @@ export default function StatsPage() {
               My Watchlist
             </Toggle>
           </div>
-          <div className="flex rounded-lg border border-fpl-border bg-fpl-dark p-1">
+          <div className="flex rounded-lg border border-fpl-border bg-fpl-raised p-1">
             <Toggle active={view === "table"} onClick={() => setView("table")}>
               Table view
             </Toggle>
@@ -105,7 +107,7 @@ export default function StatsPage() {
               setPage(1);
             }}
             placeholder="Search player"
-            className="w-64 rounded-lg border border-fpl-border bg-fpl-dark px-3 py-2 text-sm text-primary outline-none focus:border-fpl-green"
+            className="w-64 rounded-lg border border-fpl-border bg-fpl-raised px-3 py-2 text-sm text-primary outline-none focus:border-fpl-green"
           />
           <select
             value={position}
@@ -113,7 +115,7 @@ export default function StatsPage() {
               setPosition(event.target.value);
               setPage(1);
             }}
-            className="rounded-lg border border-fpl-border bg-fpl-dark px-3 py-2 text-sm text-primary outline-none focus:border-fpl-green"
+            className="rounded-lg border border-fpl-border bg-fpl-raised px-3 py-2 text-sm text-primary outline-none focus:border-fpl-green"
           >
             <option>All</option>
             <option>Goalkeeper</option>
@@ -137,7 +139,7 @@ export default function StatsPage() {
                   ))}
                 </tr>
               </thead>
-              <tbody>{visible.map((player) => <PlayerRow key={player.name} player={player} />)}</tbody>
+              <tbody>{visible.map((player) => <PlayerRow key={player.name} player={player} compact={compactRows} />)}</tbody>
             </table>
           </div>
         ) : (
@@ -147,7 +149,7 @@ export default function StatsPage() {
                 type="button"
                 key={player.name}
                 onClick={() => openDrawer(player.name)}
-                className="rounded-xl border border-fpl-border bg-fpl-dark/25 p-4 text-left hover:bg-fpl-purple/20"
+                className="rounded-[10px] border border-fpl-border bg-fpl-card p-4 text-left hover:bg-fpl-raised"
               >
                 <div className="flex items-center gap-4">
                   <img
@@ -219,7 +221,7 @@ function Toggle({
       type="button"
       onClick={onClick}
       className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-        active ? "bg-fpl-green text-fpl-dark" : "text-muted hover:text-primary"
+        active ? "bg-fpl-green text-fpl-dark" : "text-secondary hover:text-primary"
       }`}
     >
       {children}

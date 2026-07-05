@@ -26,7 +26,7 @@ export function MiniSparkline({
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
           {showTooltip ? (
-            <Tooltip contentStyle={{ background: "#240044", border: "1px solid #3D0066" }} />
+            <Tooltip contentStyle={{ background: "#161616", border: "1px solid #2A2A2A", color: "#FFFFFF" }} />
           ) : null}
           <Line
             dataKey={dataKey}

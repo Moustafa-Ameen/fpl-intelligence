@@ -13,12 +13,14 @@ export default function SquadPage() {
   const [teamId, setTeamId] = useState("");
   const [squad, setSquad] = useState<SquadPlayer[]>([]);
   const [team, setTeam] = useState<TeamData | null>(null);
+  const [showBench, setShowBench] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     queueMicrotask(() => {
       const savedTeamId = window.localStorage.getItem("fpl_team_id") ?? "";
+      setShowBench(window.localStorage.getItem("show_bench_players") !== "false");
       setTeamId(savedTeamId);
       if (!savedTeamId) return;
 
@@ -48,7 +50,7 @@ export default function SquadPage() {
   if (!teamId) {
     return (
       <div className="flex min-h-[65vh] items-center justify-center">
-        <div className="rounded-xl border border-fpl-border bg-fpl-card p-8 text-center text-muted">
+        <div className="fpl-card-shadow rounded-[10px] border border-fpl-border bg-fpl-card p-8 text-center text-muted">
           Enter your FPL team ID in the sidebar to see your squad predictions.
         </div>
       </div>
@@ -65,7 +67,7 @@ export default function SquadPage() {
     <div>
       <SectionHeader title="My Squad" subtitle={team?.team_name ?? `Team #${teamId}`} />
       <Panel>
-        <PitchView squad={squad} averageByPosition={averageByPosition} />
+        <PitchView squad={squad} averageByPosition={averageByPosition} showBench={showBench} />
         <div className="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
           <Summary label="Predicted GW Points" value={points(predictedTotal)} />
           <Summary label="Squad Value" value={`£${points(team?.squad_value)}`} />
@@ -79,8 +81,8 @@ export default function SquadPage() {
 
 function Summary({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-fpl-border bg-fpl-dark/35 p-4">
-      <div className="text-[11px] uppercase tracking-[0.12em] text-muted">{label}</div>
+    <div className="rounded-lg border border-fpl-border bg-fpl-raised p-4">
+      <div className="text-[11px] uppercase tracking-[0.08em] text-muted">{label}</div>
       <div className="mt-2 font-mono text-xl font-bold text-primary">{value}</div>
     </div>
   );

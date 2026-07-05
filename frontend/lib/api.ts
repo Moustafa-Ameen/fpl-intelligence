@@ -15,7 +15,7 @@ import type {
 export const API_BASE = "http://localhost:8000";
 
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const response = await fetch(`${API_BASE}${path}`, { next: { revalidate: 300 } });
   if (!response.ok) {
     throw new Error(`API request failed: ${path}`);
   }

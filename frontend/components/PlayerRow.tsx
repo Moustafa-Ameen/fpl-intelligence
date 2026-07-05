@@ -7,30 +7,32 @@ import { StartLikelihood } from "./StartLikelihood";
 
 interface PlayerRowProps {
   player: Player;
+  compact?: boolean;
 }
 
-export function PlayerRow({ player }: PlayerRowProps) {
+export function PlayerRow({ player, compact = false }: PlayerRowProps) {
   const { openDrawer } = useDrawer();
+  const rowPadding = compact ? "py-1.5" : "py-3";
 
   return (
-    <tr className="border-b border-fpl-border/80 text-sm odd:bg-fpl-dark/15 hover:bg-fpl-purple/15">
-      <td className="py-3 pr-4 font-medium text-primary">
+    <tr className="border-b border-fpl-border/80 text-sm odd:bg-fpl-raised/40 hover:bg-fpl-raised">
+      <td className={`${rowPadding} pr-4 font-medium text-primary`}>
         <button type="button" onClick={() => openDrawer(player.name)} className="hover:text-fpl-green">
           {player.name}
         </button>
       </td>
-      <td className="py-3 pr-4 text-muted">{player.team}</td>
-      <td className="py-3 pr-4 text-muted">{positionCode(player.position)}</td>
-      <td className="py-3 pr-4 font-mono text-primary">{points(player.price)}</td>
-      <td className="py-3 pr-4 font-mono text-primary">{points(player.total_points, 0)}</td>
-      <td className="py-3 pr-4 font-mono text-primary">{points(player.ppg)}</td>
-      <td className="py-3 pr-4 font-mono text-primary">{points(player.form)}</td>
-      <td className="py-3 pr-4">
+      <td className={`${rowPadding} pr-4 text-secondary`}>{player.team}</td>
+      <td className={`${rowPadding} pr-4 text-secondary`}>{positionCode(player.position)}</td>
+      <td className={`${rowPadding} pr-4 font-mono text-primary`}>{points(player.price)}</td>
+      <td className={`${rowPadding} pr-4 font-mono text-primary`}>{points(player.total_points, 0)}</td>
+      <td className={`${rowPadding} pr-4 font-mono text-primary`}>{points(player.ppg)}</td>
+      <td className={`${rowPadding} pr-4 font-mono text-primary`}>{points(player.form)}</td>
+      <td className={`${rowPadding} pr-4`}>
         <StartLikelihood value={player.start_likelihood} />
       </td>
-      <td className="py-3 pr-4 font-mono text-primary">{points(player.value)}</td>
-      <td className="py-3 pr-4 font-mono text-primary">{points(player.captain_score)}</td>
-      <td className="py-3 pr-4 font-mono text-primary">{points(player.transfer_score)}</td>
+      <td className={`${rowPadding} pr-4 font-mono text-primary`}>{points(player.value)}</td>
+      <td className={`${rowPadding} pr-4 font-mono text-primary`}>{points(player.captain_score)}</td>
+      <td className={`${rowPadding} pr-4 font-mono text-primary`}>{points(player.transfer_score)}</td>
     </tr>
   );
 }

@@ -1,11 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --canvas-bg: #1a0033;
-  --surface-card: #240044;
-  --border-muted: #3d0066;
+  --canvas-bg: #0d0d0d;
+  --surface-card: #161616;
+  --surface-raised: #1f1f1f;
+  --border-muted: #2a2a2a;
   --text-primary: #ffffff;
-  --text-muted: #b388cc;
+  --text-secondary: #a0a0a0;
+  --text-muted: #606060;
   --accent-green: #00ff87;
   --accent-gold: #ffd700;
   --accent-purple: #7b2fbe;
@@ -16,8 +18,10 @@
 @theme inline {
   --color-canvas: var(--canvas-bg);
   --color-card: var(--surface-card);
+  --color-raised: var(--surface-raised);
   --color-border-muted: var(--border-muted);
   --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
   --color-muted: var(--text-muted);
   --color-cyan: var(--accent-green);
   --color-up: var(--accent-green);
@@ -32,7 +36,6 @@
   --color-fpl-red: var(--trend-down);
   --color-fpl-amber: var(--amber);
   --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
 }
 
 * {
@@ -44,12 +47,16 @@ body {
   min-height: 100%;
   background: var(--canvas-bg);
   color: var(--text-primary);
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 15px;
+  font-family: var(--font-inter), -apple-system, sans-serif;
+  font-size: 14px;
 }
 
 body {
   margin: 0;
+}
+
+.font-mono {
+  font-family: var(--font-mono), "SFMono-Regular", Consolas, monospace;
 }
 
 button,
@@ -73,11 +80,23 @@ table {
 .fpl-button {
   border-radius: 8px;
   background: #00ff87;
-  color: #1a0033;
+  color: #0d0d0d;
   font-weight: 700;
   transition: background 0.15s ease;
 }
 
 .fpl-button:hover {
   background: #00cc6a;
+}
+
+.fpl-secondary-button {
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.fpl-card-shadow {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }

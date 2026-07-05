@@ -94,7 +94,7 @@ export default function ProofPage() {
               <CartesianGrid stroke="#1F2231" />
               <XAxis dataKey="strategy" stroke="#94A3B8" tick={{ fontSize: 11 }} interval={0} angle={-18} height={70} />
               <YAxis stroke="#94A3B8" tick={{ fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#240044", border: "1px solid #3D0066" }} />
+              <Tooltip contentStyle={{ background: "#161616", border: "1px solid #2A2A2A", color: "#FFFFFF" }} />
               <Bar dataKey="total_captain_points" fill="#00FF87" />
             </BarChart>
           </ResponsiveContainer>
@@ -108,7 +108,7 @@ export default function ProofPage() {
               <CartesianGrid stroke="#1F2231" />
               <XAxis dataKey="model" stroke="#94A3B8" tick={{ fontSize: 11 }} interval={0} angle={-12} height={60} />
               <YAxis stroke="#94A3B8" tick={{ fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#240044", border: "1px solid #3D0066" }} />
+              <Tooltip contentStyle={{ background: "#161616", border: "1px solid #2A2A2A", color: "#FFFFFF" }} />
               <Legend />
               <Bar dataKey="precision_at_10" name="Precision @10" fill="#00FF87" />
               <Bar dataKey="recall_at_10" name="Recall @10" fill="#10B981" />

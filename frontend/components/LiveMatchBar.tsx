@@ -12,7 +12,11 @@ export function LiveMatchBar() {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    queueMicrotask(() => setHidden(window.localStorage.getItem("hide_match_bar") === "true"));
+    queueMicrotask(() => {
+      const explicit = window.localStorage.getItem("show_match_bar");
+      const legacyHidden = window.localStorage.getItem("hide_match_bar") === "true";
+      setHidden(explicit === "false" || legacyHidden);
+    });
     Promise.all([getCurrentGameweek(), getFixtures()])
       .then(([gw, rows]) => {
         setGameweek(gw.current_gw);
@@ -40,7 +44,8 @@ export function LiveMatchBar() {
   );
 
   function hide() {
-    window.localStorage.setItem("hide_match_bar", "true");
+    window.localStorage.setItem("show_match_bar", "false");
+    window.localStorage.removeItem("hide_match_bar");
     setHidden(true);
   }
 
@@ -49,6 +54,7 @@ export function LiveMatchBar() {
       <button
         type="button"
         onClick={() => {
+          window.localStorage.setItem("show_match_bar", "true");
           window.localStorage.removeItem("hide_match_bar");
           setHidden(false);
         }}
@@ -60,32 +66,32 @@ export function LiveMatchBar() {
   }
 
   return (
-    <div className="mb-6 flex h-12 items-center justify-between rounded-xl border border-fpl-border bg-fpl-card px-4">
+    <div className="fpl-card-shadow mb-6 flex h-12 items-center justify-between rounded-[10px] border border-fpl-border bg-fpl-card px-4">
       <div className="min-w-0 text-sm">
         {live.length ? (
           <div className="flex items-center gap-3">
-            <span className="font-bold text-fpl-green">● LIVE</span>
+            <span className="font-bold text-fpl-green">LIVE</span>
             <div className="truncate text-primary">
               {live
                 .map(
                   (fixture) =>
                     `${fixture.team_h_short ?? fixture.team_h} ${fixture.team_h_score ?? ""}-${fixture.team_a_score ?? ""} ${fixture.team_a_short ?? fixture.team_a} (${fixture.minutes ?? "Live"}')`,
                 )
-                .join(" · ")}
+                .join(" - ")}
             </div>
           </div>
         ) : nextFixture ? (
-          <span className="truncate text-muted">
+          <span className="truncate text-secondary">
             <span className="font-semibold text-primary">Next:</span>{" "}
             {nextFixture.team_h_name ?? `Team ${nextFixture.team_h}`} vs{" "}
-            {nextFixture.team_a_name ?? `Team ${nextFixture.team_a}`} ·{" "}
-            {formatKickoff(nextFixture.kickoff_time)} ·{" "}
+            {nextFixture.team_a_name ?? `Team ${nextFixture.team_a}`} -{" "}
+            {formatKickoff(nextFixture.kickoff_time)} -{" "}
             <span className="font-mono text-fpl-green">
               Starts in {formatCountdown(nextFixture.kickoff_time, now)}
             </span>
           </span>
         ) : (
-          <span className="text-muted">Gameweek {gameweek ?? "-"} · Fixtures pending</span>
+          <span className="text-muted">Gameweek {gameweek ?? "-"} - Fixtures pending</span>
         )}
       </div>
       <button type="button" onClick={hide} className="rounded p-1 text-muted hover:text-primary">

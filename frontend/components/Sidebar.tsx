@@ -7,6 +7,7 @@ import {
   Edit2,
   Home,
   Shield,
+  Settings,
   TrendingUp,
   Trophy,
   Users,
@@ -38,6 +39,7 @@ const navGroups = [
     items: [
       { href: "/stats", label: "All Players", icon: Users },
       { href: "/proof", label: "Proof It Works", icon: BarChart3 },
+      { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
 ];
@@ -88,11 +90,11 @@ export function Sidebar({
           type="button"
           aria-label="Close menu"
           onClick={onCloseMobile}
-          className="fixed inset-0 z-30 bg-fpl-dark/70 md:hidden"
+          className="fixed inset-0 z-30 bg-black/70 md:hidden"
         />
       ) : null}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[220px] flex-col border-r border-fpl-border bg-fpl-dark transition-transform md:translate-x-0 md:w-[72px] lg:w-[220px] ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-[220px] flex-col border-r border-[#1F1F1F] bg-[#111111] transition-transform md:translate-x-0 md:w-[72px] lg:w-[220px] ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -108,7 +110,7 @@ export function Sidebar({
             <Zap className="h-5 w-5 text-fpl-green" />
             <span className="md:hidden lg:inline">FPL Intelligence</span>
           </div>
-          <div className="mt-2 text-xs text-muted md:hidden lg:block">
+          <div className="mt-2 text-xs text-secondary md:hidden lg:block">
             {gameweek ? `Gameweek ${gameweek}` : "Gameweek loading"}
           </div>
         </div>
@@ -116,7 +118,7 @@ export function Sidebar({
         <nav className="mt-7 space-y-6">
           {navGroups.map((group) => (
             <div key={group.label}>
-              <div className="mb-2 px-5 text-[10px] font-bold uppercase tracking-[0.1em] text-muted md:hidden lg:block">
+              <div className="mb-2 px-5 text-[10px] font-bold uppercase tracking-[0.08em] text-muted md:hidden lg:block">
                 {group.label}
               </div>
               <div className="space-y-1">
@@ -130,7 +132,7 @@ export function Sidebar({
           ))}
         </nav>
 
-        <div className="mt-auto border-t border-fpl-border p-4 md:px-2 lg:p-4">
+        <div className="mt-auto border-t border-[#1F1F1F] p-4 md:px-2 lg:p-4">
           <div className="md:hidden lg:block">
             {teamId ? (
               <div>
@@ -150,7 +152,7 @@ export function Sidebar({
                   value={draftId}
                   onChange={(event) => setDraftId(event.target.value)}
                   placeholder="Enter FPL Team ID"
-                  className="w-full rounded-lg border border-fpl-border bg-fpl-card px-3 py-2 text-xs text-primary outline-none focus:border-fpl-green"
+                  className="w-full rounded-lg border border-fpl-border bg-fpl-raised px-3 py-2 text-xs text-primary outline-none focus:border-fpl-green"
                 />
                 <button type="button" onClick={saveTeamId} className="fpl-button w-full px-3 py-2 text-xs">
                   Confirm

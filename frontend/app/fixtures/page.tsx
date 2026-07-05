@@ -40,7 +40,7 @@ export default function FixturesPage() {
       <Panel className="mb-6">
         <div className="mb-4 flex items-center justify-between gap-4">
           <h2 className="text-xl font-semibold text-primary">Best fixtures next 3 GWs</h2>
-          <div className="flex rounded-lg border border-fpl-border bg-fpl-dark p-1">
+          <div className="flex rounded-lg border border-fpl-border bg-fpl-raised p-1">
             <Toggle active={mode === "team"} onClick={() => setMode("team")}>
               By team
             </Toggle>
@@ -120,7 +120,7 @@ export default function FixturesPage() {
                         onClick={() =>
                           setTooltip(`${team.team} vs ${fixture.opponent} · ${fixture.home ? "Home" : "Away"} · difficulty ${fixture.difficulty}`)
                         }
-                        className="flex items-center justify-between rounded-lg bg-fpl-dark/30 px-3 py-2 text-sm"
+                        className="flex items-center justify-between rounded-lg bg-fpl-raised px-3 py-2 text-sm"
                       >
                         <span>{team.team}</span>
                         <FixtureChip difficulty={fixture.difficulty} />
@@ -135,7 +135,7 @@ export default function FixturesPage() {
           <button
             type="button"
             onClick={() => setTooltip(null)}
-            className="fixed bottom-6 right-6 z-40 rounded-xl border border-fpl-border bg-fpl-card px-4 py-3 text-sm text-primary shadow-xl"
+            className="fixed bottom-6 right-6 z-40 rounded-[10px] border border-fpl-border bg-fpl-card px-4 py-3 text-sm text-primary shadow-xl"
           >
             {tooltip}
           </button>
@@ -164,7 +164,7 @@ function Toggle({
       type="button"
       onClick={onClick}
       className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-        active ? "bg-fpl-green text-fpl-dark" : "text-muted hover:text-primary"
+        active ? "bg-fpl-green text-fpl-dark" : "text-secondary hover:text-primary"
       }`}
     >
       {children}

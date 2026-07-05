@@ -86,7 +86,7 @@ export default function TransfersPage() {
 
       <Panel>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex rounded-lg border border-fpl-border bg-fpl-dark p-1">
+          <div className="flex rounded-lg border border-fpl-border bg-fpl-raised p-1">
             <Toggle active={mode === "general"} onClick={() => setMode("general")}>
               General targets
             </Toggle>
@@ -94,7 +94,7 @@ export default function TransfersPage() {
               For your squad
             </Toggle>
           </div>
-          <div className="flex rounded-lg border border-fpl-border bg-fpl-dark p-1">
+          <div className="flex rounded-lg border border-fpl-border bg-fpl-raised p-1">
             {positions.map((item) => (
               <Toggle key={item} active={position === item} onClick={() => setPosition(item)}>
                 {item}
@@ -106,13 +106,13 @@ export default function TransfersPage() {
               value={minPrice}
               onChange={(event) => setMinPrice(event.target.value)}
               placeholder="Min £"
-              className="w-24 rounded-lg border border-fpl-border bg-fpl-dark px-3 py-2 text-xs text-primary outline-none focus:border-fpl-green"
+              className="w-24 rounded-lg border border-fpl-border bg-fpl-raised px-3 py-2 text-xs text-primary outline-none focus:border-fpl-green"
             />
             <input
               value={maxPrice}
               onChange={(event) => setMaxPrice(event.target.value)}
               placeholder="Max £"
-              className="w-24 rounded-lg border border-fpl-border bg-fpl-dark px-3 py-2 text-xs text-primary outline-none focus:border-fpl-green"
+              className="w-24 rounded-lg border border-fpl-border bg-fpl-raised px-3 py-2 text-xs text-primary outline-none focus:border-fpl-green"
             />
           </div>
         </div>
@@ -137,7 +137,7 @@ export default function TransfersPage() {
                 const trend = history[player.name] ?? [];
                 const trendColor = sparkColor(trend);
                 return (
-                  <tr key={player.name} className="border-b border-fpl-border text-sm odd:bg-fpl-dark/15">
+                  <tr key={player.name} className="border-b border-fpl-border text-sm odd:bg-fpl-raised/40 hover:bg-fpl-raised">
                     <td className="py-3 pr-4 font-medium text-primary">
                       <button type="button" onClick={() => openDrawer(player.name)} className="hover:text-fpl-green">
                         {player.name}
@@ -187,7 +187,7 @@ function Toggle({
       type="button"
       onClick={onClick}
       className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-        active ? "bg-fpl-green text-fpl-dark" : "text-muted hover:text-primary"
+        active ? "bg-fpl-green text-fpl-dark" : "text-secondary hover:text-primary"
       }`}
     >
       {children}
@@ -200,10 +200,10 @@ function average(values: number[]) {
 }
 
 function sparkColor(rows: PlayerHistoryPoint[]) {
-  if (rows.length < 2) return "#B388CC";
+  if (rows.length < 2) return "#A0A0A0";
   const first = rows[0].price;
   const last = rows.at(-1)?.price ?? first;
   if (last > first) return "#00FF87";
   if (last < first) return "#FF4444";
-  return "#B388CC";
+  return "#A0A0A0";
 }

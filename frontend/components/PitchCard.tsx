@@ -3,7 +3,6 @@
 import type { SquadPlayer } from "@/lib/types";
 import { points } from "@/lib/format";
 import { useDrawer } from "@/context/DrawerContext";
-import { StartLikelihood } from "./StartLikelihood";
 
 interface PitchCardProps {
   player: SquadPlayer;
@@ -15,13 +14,14 @@ export function PitchCard({ player, average, bench = false }: PitchCardProps) {
   const { openDrawer } = useDrawer();
   const predicted = player.predicted_pts ?? 0;
   const color = predicted >= average ? "text-fpl-green" : "text-fpl-red";
+  const dotColor = startDotColor(player.start_likelihood);
   const teamCode = player.team_code ?? 1;
 
   return (
     <button
       type="button"
       onClick={() => openDrawer(player.name)}
-      className={`relative flex w-[70px] flex-col items-center rounded-lg p-1.5 text-center transition hover:bg-white/10 md:w-[90px] ${
+      className={`relative flex w-[100px] flex-col items-center rounded-lg p-2 text-center transition hover:bg-white/10 ${
         bench ? "opacity-70" : ""
       }`}
     >
@@ -29,7 +29,7 @@ export function PitchCard({ player, average, bench = false }: PitchCardProps) {
         <img
           src={`https://fantasy.premierleague.com/dist/img/shirts/standard/shirt_${teamCode}-66.png`}
           alt={`${player.team} kit`}
-          className="h-10 w-12 object-contain md:h-12"
+          className="h-14 w-16 object-contain"
         />
         {player.is_captain || player.is_vice_captain ? (
           <span
@@ -41,11 +41,18 @@ export function PitchCard({ player, average, bench = false }: PitchCardProps) {
           </span>
         ) : null}
       </div>
-      <div className="mt-1 w-full truncate text-xs font-bold text-white">
+      <div className="mt-1 w-full truncate text-[13px] font-bold text-white">
         {player.web_name ?? player.name.split(" ").at(-1)}
       </div>
-      <div className={`font-mono text-[11px] font-bold ${color}`}>{points(predicted)} xP</div>
-      <StartLikelihood value={player.start_likelihood} />
+      <div className={`font-mono text-xs font-bold ${color}`}>{points(predicted)} xP</div>
+      <span className={`mt-1 h-2 w-2 rounded-full ${dotColor}`} aria-label="Start likelihood" />
     </button>
   );
+}
+
+function startDotColor(value: number | null | undefined) {
+  const safe = value ?? 0;
+  if (safe >= 0.8) return "bg-fpl-green";
+  if (safe >= 0.5) return "bg-fpl-amber";
+  return "bg-fpl-red";
 }
