@@ -15,7 +15,7 @@ export function PlayerRow({ player, compact = false }: PlayerRowProps) {
   const rowPadding = compact ? "py-1.5" : "py-3";
 
   return (
-    <tr className="border-b border-fpl-border/80 text-sm odd:bg-fpl-raised/40 hover:bg-fpl-raised">
+    <tr className="fpl-player-row border-b border-fpl-border/80 text-sm odd:bg-fpl-raised/40">
       <td className={`${rowPadding} pr-4 font-medium text-primary`}>
         <button type="button" onClick={() => openDrawer(player.name)} className="hover:text-fpl-green">
           {player.name}

@@ -17,6 +17,7 @@ import {
 import { useEffect, useState } from "react";
 import { getCurrentGameweek, getHealth } from "@/lib/api";
 import { NavLink } from "./NavLink";
+import { PLLogo } from "./PLLogo";
 
 const navGroups = [
   {
@@ -94,7 +95,7 @@ export function Sidebar({
         />
       ) : null}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[220px] flex-col border-r border-[#1F1F1F] bg-[#111111] transition-transform md:translate-x-0 md:w-[72px] lg:w-[220px] ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-[220px] flex-col border-r border-[rgba(123,47,190,0.2)] bg-[#111111] transition-transform md:translate-x-0 md:w-[72px] lg:w-[220px] ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -113,9 +114,12 @@ export function Sidebar({
           <div className="mt-2 text-xs text-secondary md:hidden lg:block">
             {gameweek ? `Gameweek ${gameweek}` : "Gameweek loading"}
           </div>
+          <div className="mx-auto mt-2 mb-5 flex justify-center md:hidden lg:flex">
+            <PLLogo size={44} />
+          </div>
         </div>
 
-        <nav className="mt-7 space-y-6">
+        <nav className="mt-3 space-y-6">
           {navGroups.map((group) => (
             <div key={group.label}>
               <div className="mb-2 px-5 text-[10px] font-bold uppercase tracking-[0.08em] text-muted md:hidden lg:block">

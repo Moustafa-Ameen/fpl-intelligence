@@ -16,12 +16,14 @@ export function PitchCard({ player, average, bench = false }: PitchCardProps) {
   const color = predicted >= average ? "text-fpl-green" : "text-fpl-red";
   const dotColor = startDotColor(player.start_likelihood);
   const teamCode = player.team_code ?? 1;
+  const width = bench ? "w-[112px]" : "w-[110px]";
+  const kitSize = bench ? "h-14 w-[68px]" : "h-[60px] w-[70px]";
 
   return (
     <button
       type="button"
       onClick={() => openDrawer(player.name)}
-      className={`relative flex w-[100px] flex-col items-center rounded-lg p-2 text-center transition hover:bg-white/10 ${
+      className={`fpl-pitch-card relative flex ${width} flex-col items-center rounded-lg p-2 text-center hover:bg-white/10 ${
         bench ? "opacity-70" : ""
       }`}
     >
@@ -29,7 +31,7 @@ export function PitchCard({ player, average, bench = false }: PitchCardProps) {
         <img
           src={`https://fantasy.premierleague.com/dist/img/shirts/standard/shirt_${teamCode}-66.png`}
           alt={`${player.team} kit`}
-          className="h-14 w-16 object-contain"
+          className={`${kitSize} object-contain`}
         />
         {player.is_captain || player.is_vice_captain ? (
           <span
@@ -41,7 +43,7 @@ export function PitchCard({ player, average, bench = false }: PitchCardProps) {
           </span>
         ) : null}
       </div>
-      <div className="mt-1 w-full truncate text-[13px] font-bold text-white">
+      <div className="mt-1 w-full truncate text-[13px] font-semibold text-white">
         {player.web_name ?? player.name.split(" ").at(-1)}
       </div>
       <div className={`font-mono text-xs font-bold ${color}`}>{points(predicted)} xP</div>

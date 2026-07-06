@@ -1,6 +1,6 @@
 "use client";
 
-import { Crown } from "lucide-react";
+import { ArrowRight, Crown } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { FixtureChip } from "@/components/FixtureChip";
 import { EmptyState } from "@/components/LoadingState";
@@ -9,7 +9,7 @@ import { StartLikelihood } from "@/components/StartLikelihood";
 import { StatCard } from "@/components/StatCard";
 import { useDrawer } from "@/context/DrawerContext";
 import { getCurrentGameweek, getSquad } from "@/lib/api";
-import { visibleFixtures } from "@/lib/fixtures";
+import { fixtureTickerWithFallback, visibleFixtures } from "@/lib/fixtures";
 import { initials, points, positionCode } from "@/lib/format";
 import type {
   AccuracyResult,
@@ -64,6 +64,7 @@ export function OverviewClient({
   const topCaptain = captains[0];
   const bestAccuracy = accuracy.find((row) => row.model === "FPL Intelligence (best)") ?? accuracy[0];
   const suggestions = buildSuggestions(squad, transfers, players);
+  const fixtureRows = fixtureTickerWithFallback(fixtures);
 
   if (!players.length) return <EmptyState />;
 
@@ -92,37 +93,62 @@ export function OverviewClient({
         <div className="space-y-6">
           <Panel title="Suggested Moves">
             {!connected ? (
-              <p className="mb-4 text-sm text-secondary">Connect your FPL team for personalised suggestions.</p>
+              <p className="mb-4 text-sm italic text-muted">
+                Connect your FPL team ID in Settings for personalised suggestions
+              </p>
             ) : null}
             <div className="space-y-4">
               {suggestions.slice(0, 2).map(({ incoming, outgoing, gain }) => (
-                <div key={`${incoming.name}-${outgoing?.name}`} className="rounded-[10px] border border-fpl-border p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
+                <div key={`${incoming.name}-${outgoing?.name}`} className="fpl-suggested-move rounded-[10px] border border-fpl-border p-4">
+                  <div className="grid grid-cols-[minmax(0,1fr)_44px_minmax(0,1fr)] items-center gap-3">
                     <button
                       type="button"
                       onClick={() => outgoing && openDrawer(outgoing.name)}
-                      className="text-left"
+                      className="flex min-w-0 items-center gap-3 text-left"
                     >
-                      <span className="mr-2 rounded bg-fpl-red/15 px-2 py-1 text-[11px] font-bold text-fpl-red">
-                        OUT
-                      </span>
-                      <span className="font-medium text-primary">{outgoing?.name ?? "Bench option"}</span>
-                      <span className="text-sm text-secondary"> - {outgoing?.team ?? "Unknown"} - low xP</span>
+                      <img
+                        src={kitUrl(outgoing?.team_code)}
+                        alt={`${outgoing?.team ?? "Outgoing"} kit`}
+                        className="h-12 w-12 shrink-0 object-contain"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="shrink-0 rounded bg-fpl-red/15 px-2 py-1 text-[11px] font-bold text-fpl-red">
+                            OUT
+                          </span>
+                          <span className="truncate text-sm font-bold text-primary">
+                            {outgoing?.name ?? "Bench option"}
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate text-xs text-muted">
+                          {outgoing?.team ?? "Unknown"} - low xP
+                        </div>
+                      </div>
                     </button>
-                    <div className="text-muted">-&gt;</div>
-                    <button type="button" onClick={() => openDrawer(incoming.name)} className="text-right">
-                      <span className="mr-2 rounded bg-fpl-green/15 px-2 py-1 text-[11px] font-bold text-fpl-green">
-                        IN
-                      </span>
-                      <span className="font-medium text-primary">{incoming.name}</span>
-                      <span className="text-sm text-secondary">
-                        {" "}
-                        - {incoming.team} - {positionCode(incoming.position)} - GBP {points(incoming.price)}
-                      </span>
+                    <div className="move-arrow flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.03] text-muted">
+                      <ArrowRight className="h-[18px] w-[18px] text-[#606060]" />
+                    </div>
+                    <button type="button" onClick={() => openDrawer(incoming.name)} className="flex min-w-0 items-center gap-3 text-left">
+                      <img
+                        src={kitUrl(incoming.team_code)}
+                        alt={`${incoming.team} kit`}
+                        className="h-12 w-12 shrink-0 object-contain"
+                      />
+                      <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="shrink-0 rounded bg-fpl-green/15 px-2 py-1 text-[11px] font-bold text-fpl-green">
+                          IN
+                        </span>
+                        <span className="truncate text-sm font-bold text-primary">{incoming.name}</span>
+                      </div>
+                      <div className="mt-1 truncate text-xs text-muted">
+                        {incoming.team} - {positionCode(incoming.position)} - £{points(incoming.price)}m
+                      </div>
+                      </div>
                     </button>
                   </div>
-                  <div className="mt-2 text-sm font-semibold text-fpl-green">
-                    +{points(Math.max(gain, 0))} pts
+                  <div className="mt-3 border-t border-[rgba(255,255,255,0.06)] pt-2 pl-1 text-[13px] font-semibold text-fpl-green">
+                    +{points(Math.max(gain, 0))} predicted pts gain
                   </div>
                 </div>
               ))}
@@ -136,10 +162,10 @@ export function OverviewClient({
                   type="button"
                   key={player.name}
                   onClick={() => openDrawer(player.name)}
-                  className="flex w-full items-center gap-4 rounded-[10px] border border-fpl-border p-4 text-left transition hover:bg-fpl-raised"
+                  className="fpl-captain-row flex w-full items-center gap-4 rounded-[10px] border border-fpl-border p-4 text-left"
                 >
                   <div className="flex h-11 w-11 items-center justify-center rounded-full bg-fpl-raised text-xs font-bold text-primary">
-                    {index === 0 ? <Crown className="h-5 w-5 text-fpl-gold" /> : initials(player.name)}
+                    {index === 0 ? <Crown className="crown-pulse h-5 w-5 text-fpl-gold" /> : initials(player.name)}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-semibold text-primary">{player.name}</div>
@@ -160,7 +186,7 @@ export function OverviewClient({
         <div className="space-y-6">
           <Panel title="Fixture Ticker">
             <div className="space-y-2">
-              {fixtures.slice(0, 8).map((team) => (
+              {fixtureRows.slice(0, 8).map((team) => (
                 <div key={team.team} className="grid grid-cols-[1fr_auto] items-center gap-4">
                   <div className="truncate text-sm text-primary">{team.team}</div>
                   <div className="flex gap-2">
@@ -220,14 +246,23 @@ function buildSuggestions(
   const candidates = squad
     .filter((player) => !player.is_captain)
     .sort((a, b) => (a.predicted_pts ?? 0) - (b.predicted_pts ?? 0))
-    .slice(0, 4);
+    .slice(0, 2);
   return candidates.flatMap((outgoing) => {
-    const incoming = transfers.find(
-      (player) =>
-        !squadNames.has(player.name) &&
-        positionCode(player.position) === outgoing.position &&
-        (!outgoing.price || player.price <= outgoing.price + 0.5),
-    );
+    const outgoingPosition = positionCode(outgoing.position);
+    const outgoingPrice = outgoing.price;
+    const outgoingProjected = outgoing.predicted_pts ?? 0;
+    const incoming = transfers
+      .filter((player) => {
+        const incomingProjected = player.adjusted_pts ?? player.predicted_pts ?? 0;
+        const priceGap = typeof outgoingPrice === "number" ? Math.abs(player.price - outgoingPrice) : 0;
+        return (
+          !squadNames.has(player.name) &&
+          positionCode(player.position) === outgoingPosition &&
+          incomingProjected > outgoingProjected &&
+          priceGap <= 1
+        );
+      })
+      .sort((a, b) => b.transfer_score - a.transfer_score)[0];
     return incoming
       ? [
           {
@@ -238,4 +273,8 @@ function buildSuggestions(
         ]
       : [];
   });
+}
+
+function kitUrl(teamCode?: number | null): string {
+  return `https://fantasy.premierleague.com/dist/img/shirts/standard/shirt_${teamCode ?? 1}-66.png`;
 }

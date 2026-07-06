@@ -8,7 +8,7 @@ interface StatCardProps {
 
 export function StatCard({ label, value, subLabel }: StatCardProps) {
   return (
-    <div className="fpl-card-shadow min-h-[120px] rounded-[10px] border border-fpl-border bg-fpl-card p-5">
+    <div className="fpl-card-shadow fpl-stat-card min-h-[120px] rounded-[10px] border border-fpl-border bg-fpl-card p-5">
       <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
         {label}
       </div>

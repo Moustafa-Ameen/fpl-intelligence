@@ -137,7 +137,7 @@ export default function TransfersPage() {
                 const trend = history[player.name] ?? [];
                 const trendColor = sparkColor(trend);
                 return (
-                  <tr key={player.name} className="border-b border-fpl-border text-sm odd:bg-fpl-raised/40 hover:bg-fpl-raised">
+                  <tr key={player.name} className="fpl-player-row border-b border-fpl-border text-sm odd:bg-fpl-raised/40">
                     <td className="py-3 pr-4 font-medium text-primary">
                       <button type="button" onClick={() => openDrawer(player.name)} className="hover:text-fpl-green">
                         {player.name}

@@ -22,8 +22,8 @@ export function NavLink({ href, children, icon: Icon, onNavigate }: NavLinkProps
       onClick={onNavigate}
       className={`flex items-center gap-3 border-l-[3px] px-4 py-2.5 text-[13px] transition md:justify-center md:px-0 lg:justify-start lg:px-4 ${
         active
-          ? "border-fpl-green bg-[rgba(0,255,135,0.06)] text-fpl-green"
-          : "border-transparent text-primary hover:bg-fpl-raised hover:text-primary"
+          ? "border-transparent bg-[rgba(0,255,135,0.06)] text-fpl-green shadow-[inset_3px_0_0_#00FF87,0_0_12px_rgba(0,255,135,0.08)]"
+          : "border-transparent text-primary hover:translate-x-0.5 hover:bg-[rgba(255,255,255,0.04)] hover:text-primary"
       }`}
       title={String(children)}
     >

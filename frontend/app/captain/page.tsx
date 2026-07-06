@@ -40,7 +40,7 @@ export default function CaptainPage() {
       <button
         type="button"
         onClick={() => openDrawer(topPick.name)}
-        className="fpl-card-shadow mb-6 min-h-40 w-full rounded-[10px] border border-fpl-border border-l-4 border-l-fpl-purple bg-fpl-card p-6 text-left"
+        className="fpl-featured-captain mb-6 min-h-40 w-full rounded-[10px] border border-fpl-border bg-fpl-card p-6 text-left"
       >
         <div className="flex items-start justify-between gap-6">
           <div>
@@ -48,7 +48,7 @@ export default function CaptainPage() {
             <div className="mt-1 text-sm text-secondary">{topPick.team}</div>
             <p className="mt-4 text-sm text-secondary">{topPick.reasoning ?? "Strong overall metrics"}</p>
           </div>
-          <Crown className="h-9 w-9 text-fpl-gold" />
+          <Crown className="crown-pulse h-9 w-9 text-fpl-gold" />
           <div className="text-right">
             <div className="font-mono text-[40px] font-bold text-fpl-gold">
               {points(topPick.predicted_pts ?? topPick.adjusted_pts)} xP
@@ -67,10 +67,10 @@ export default function CaptainPage() {
               type="button"
               key={player.name}
               onClick={() => openDrawer(player.name)}
-              className="grid w-full grid-cols-[48px_1fr_auto_auto] items-center gap-4 rounded-lg px-4 py-3 text-left odd:bg-fpl-raised/40 hover:bg-fpl-raised"
+              className="fpl-captain-row grid w-full grid-cols-[48px_1fr_auto_auto] items-center gap-4 rounded-lg px-4 py-3 text-left odd:bg-fpl-raised/40"
             >
               <div className="font-mono text-sm text-muted">
-                {index === 0 ? <Crown className="h-4 w-4 text-fpl-gold" /> : index + 1}
+                {index === 0 ? <Crown className="crown-pulse h-4 w-4 text-fpl-gold" /> : index + 1}
               </div>
               <div>
                 <div className="font-semibold text-primary">{player.name}</div>
