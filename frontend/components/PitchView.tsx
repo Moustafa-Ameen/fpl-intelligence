@@ -23,7 +23,7 @@ export function PitchView({
 
   return (
     <div>
-      <div className="relative min-h-[520px] overflow-hidden rounded-[10px] border border-fpl-border bg-[linear-gradient(180deg,#0d5c2e_0%,#0a4a25_50%,#0d5c2e_100%)]">
+      <div className="relative min-h-[520px] overflow-hidden rounded-t-[10px] border border-fpl-border bg-[linear-gradient(180deg,#0d5c2e_0%,#0a4a25_50%,#0d5c2e_100%)]">
         <div className="pointer-events-none absolute left-0 right-0 top-1/2 border-t border-white/10" />
         <div className="pointer-events-none absolute left-1/2 top-1/2 h-[120px] w-[120px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/10" />
         <div className="pointer-events-none absolute left-1/2 top-3 h-16 w-32 -translate-x-1/2 rounded-b-full border border-t-0 border-white/10" />
@@ -49,7 +49,7 @@ export function PitchView({
       </div>
 
       {showBench ? (
-        <div className="fpl-card-shadow mt-5 rounded-[10px] border border-fpl-border bg-fpl-card px-6 py-5">
+        <div className="-mt-px border-x border-fpl-border bg-fpl-card px-6 py-5">
           <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.1em] text-muted">Bench</div>
           <div className="grid grid-cols-2 justify-items-center gap-x-12 gap-y-6 sm:grid-cols-4">
             {bench.map((player) => (

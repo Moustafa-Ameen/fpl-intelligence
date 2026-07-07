@@ -6,7 +6,7 @@ import { Panel } from "@/components/Panel";
 import { PitchView } from "@/components/PitchView";
 import { SectionHeader } from "@/components/SectionHeader";
 import { getCurrentGameweek, getSquad, getTeam } from "@/lib/api";
-import { points } from "@/lib/format";
+import { points, price } from "@/lib/format";
 import type { SquadPlayer, TeamData } from "@/lib/types";
 
 export default function SquadPage() {
@@ -68,10 +68,10 @@ export default function SquadPage() {
       <SectionHeader title="My Squad" subtitle={team?.team_name ?? `Team #${teamId}`} />
       <Panel>
         <PitchView squad={squad} averageByPosition={averageByPosition} showBench={showBench} />
-        <div className="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="-mt-px grid grid-cols-2 overflow-hidden rounded-b-[10px] border border-fpl-border bg-fpl-card lg:grid-cols-4">
           <Summary label="Predicted GW Points" value={points(predictedTotal)} />
-          <Summary label="Squad Value" value={`£${points(team?.squad_value)}`} />
-          <Summary label="Bank" value={`£${points(team?.bank_value)}`} />
+          <Summary label="Squad Value" value={price(team?.squad_value)} />
+          <Summary label="Bank" value={price(team?.bank_value)} />
           <Summary label="Overall Rank" value={team?.overall_rank?.toLocaleString() ?? "-"} />
         </div>
       </Panel>
@@ -81,7 +81,7 @@ export default function SquadPage() {
 
 function Summary({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-fpl-border bg-fpl-raised p-4">
+    <div className="border-r border-t border-fpl-border bg-fpl-raised p-4 last:border-r-0 lg:border-t-0">
       <div className="text-[11px] uppercase tracking-[0.08em] text-muted">{label}</div>
       <div className="mt-2 font-mono text-xl font-bold text-primary">{value}</div>
     </div>

@@ -1,18 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  --canvas-bg: #0d0d0d;
-  --surface-card: #161616;
-  --surface-raised: #1f1f1f;
-  --border-muted: rgba(123, 47, 190, 0.25);
+  --canvas-bg: #070b0a;
+  --surface-card: #101514;
+  --surface-raised: #17201e;
+  --border-muted: rgba(117, 255, 210, 0.16);
   --text-primary: #ffffff;
-  --text-secondary: #a0a0a0;
-  --text-muted: #606060;
+  --text-secondary: #b7c5bf;
+  --text-muted: #687670;
   --accent-green: #00ff87;
-  --accent-gold: #ffd700;
-  --accent-purple: #7b2fbe;
-  --trend-down: #ff4444;
-  --amber: #ffa500;
+  --accent-teal: #23e6c2;
+  --accent-gold: #ffc857;
+  --accent-purple: #8f4cf8;
+  --trend-down: #ff5d73;
+  --amber: #ffb84d;
 }
 
 @theme inline {
@@ -29,8 +30,10 @@
   --color-amber: var(--amber);
   --color-fpl-dark: var(--canvas-bg);
   --color-fpl-card: var(--surface-card);
+  --color-fpl-raised: var(--surface-raised);
   --color-fpl-border: var(--border-muted);
   --color-fpl-green: var(--accent-green);
+  --color-fpl-teal: var(--accent-teal);
   --color-fpl-gold: var(--accent-gold);
   --color-fpl-purple: var(--accent-purple);
   --color-fpl-red: var(--trend-down);
@@ -48,7 +51,9 @@
 html,
 body {
   min-height: 100%;
-  background: var(--canvas-bg);
+  background:
+    linear-gradient(135deg, rgba(0, 255, 135, 0.08), transparent 32%),
+    linear-gradient(180deg, #09110f 0%, var(--canvas-bg) 44%, #050706 100%);
   color: var(--text-primary);
   font-family: var(--font-inter), -apple-system, sans-serif;
   font-size: 14px;
@@ -102,13 +107,13 @@ table {
 }
 
 .fpl-card-shadow {
-  box-shadow: 0 0 0 1px rgba(123, 47, 190, 0.15), 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 1px rgba(117, 255, 210, 0.08), 0 18px 42px rgba(0, 0, 0, 0.32);
 }
 
 .fpl-stat-card:hover {
-  border-color: rgba(0, 255, 135, 0.3);
-  box-shadow: 0 0 0 1px rgba(0, 255, 135, 0.15), 0 8px 24px rgba(0, 0, 0, 0.4);
-  transform: translateY(-2px);
+  border-color: rgba(0, 255, 135, 0.38);
+  box-shadow: 0 0 0 1px rgba(0, 255, 135, 0.16), 0 18px 38px rgba(0, 0, 0, 0.36);
+  transform: translateY(-1px);
 }
 
 .fpl-player-row {
@@ -130,6 +135,13 @@ table {
   border-color: rgba(0, 255, 135, 0.4);
   box-shadow: 0 0 12px rgba(0, 255, 135, 0.2);
   transform: scale(1.05);
+}
+
+.decision-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 28px 28px;
 }
 
 .fpl-captain-row:hover {

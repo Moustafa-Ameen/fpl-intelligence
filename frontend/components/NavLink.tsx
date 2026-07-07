@@ -20,10 +20,10 @@ export function NavLink({ href, children, icon: Icon, onNavigate }: NavLinkProps
     <Link
       href={href}
       onClick={onNavigate}
-      className={`flex items-center gap-3 border-l-[3px] px-4 py-2.5 text-[13px] transition md:justify-center md:px-0 lg:justify-start lg:px-4 ${
+      className={`mx-2 flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-[13px] transition md:justify-center md:px-0 lg:justify-start lg:px-3 ${
         active
-          ? "border-transparent bg-[rgba(0,255,135,0.06)] text-fpl-green shadow-[inset_3px_0_0_#00FF87,0_0_12px_rgba(0,255,135,0.08)]"
-          : "border-transparent text-primary hover:translate-x-0.5 hover:bg-[rgba(255,255,255,0.04)] hover:text-primary"
+          ? "border-fpl-green/25 bg-fpl-green/10 text-fpl-green shadow-[0_0_18px_rgba(0,255,135,0.08)]"
+          : "text-secondary hover:bg-white/[0.04] hover:text-primary"
       }`}
       title={String(children)}
     >

@@ -33,6 +33,7 @@ const navGroups = [
       { href: "/captain", label: "Who to Captain", icon: Crown },
       { href: "/transfers", label: "Who to Sign", icon: TrendingUp },
       { href: "/fixtures", label: "Fixtures", icon: CalendarDays },
+      { href: "/chips", label: "Chip Guide", icon: Zap },
     ],
   },
   {
@@ -59,7 +60,7 @@ export function Sidebar({
 
   useEffect(() => {
     getCurrentGameweek()
-      .then((data) => setGameweek(data.current_gw))
+      .then((data) => setGameweek(data.current_gw ?? null))
       .catch(() => setGameweek(null));
     getHealth()
       .then(() => setApiOk(true))
@@ -95,7 +96,7 @@ export function Sidebar({
         />
       ) : null}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[220px] flex-col border-r border-[rgba(123,47,190,0.2)] bg-[#111111] transition-transform md:translate-x-0 md:w-[72px] lg:w-[220px] ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-[220px] flex-col border-r border-fpl-border bg-[#08100e]/95 shadow-[18px_0_48px_rgba(0,0,0,0.25)] backdrop-blur transition-transform md:translate-x-0 md:w-[72px] lg:w-[220px] ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -107,12 +108,14 @@ export function Sidebar({
           <X className="h-4 w-4" />
         </button>
         <div className="px-5 pt-6 md:px-3 lg:px-5">
-          <div className="flex items-center gap-2 text-base font-bold text-primary">
-            <Zap className="h-5 w-5 text-fpl-green" />
-            <span className="md:hidden lg:inline">FPL Intelligence</span>
+          <div className="flex items-center gap-3 text-base font-bold text-primary">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-fpl-green/30 bg-fpl-green/10 text-fpl-green">
+              <Zap className="h-5 w-5" />
+            </span>
+            <span className="leading-tight md:hidden lg:inline">FPL Intelligence</span>
           </div>
-          <div className="mt-2 text-xs text-secondary md:hidden lg:block">
-            {gameweek ? `Gameweek ${gameweek}` : "Gameweek loading"}
+          <div className="mt-3 inline-flex rounded-full border border-fpl-border bg-fpl-raised px-3 py-1 text-xs text-secondary md:hidden lg:inline-flex">
+            {gameweek ? `GW ${gameweek}` : "GW —"}
           </div>
           <div className="mx-auto mt-2 mb-5 flex justify-center md:hidden lg:flex">
             <PLLogo size={44} />
@@ -136,7 +139,7 @@ export function Sidebar({
           ))}
         </nav>
 
-        <div className="mt-auto border-t border-[#1F1F1F] p-4 md:px-2 lg:p-4">
+        <div className="mt-auto border-t border-fpl-border p-4 md:px-2 lg:p-4">
           <div className="md:hidden lg:block">
             {teamId ? (
               <div>
@@ -164,7 +167,7 @@ export function Sidebar({
               </div>
             )}
             <div className="mt-4 flex items-center gap-2 text-[11px] text-muted">
-              <span className={`h-2 w-2 rounded-full ${apiOk ? "bg-fpl-green" : "bg-fpl-red"}`} />
+              <span className={`h-2 w-2 rounded-full ${apiOk ? "bg-fpl-green shadow-[0_0_12px_rgba(0,255,135,0.7)]" : "bg-fpl-red"}`} />
               Data from FPL Official API
             </div>
           </div>
