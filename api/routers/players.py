@@ -1,3 +1,4 @@
+import unicodedata
 from typing import Any
 
 import pandas as pd
@@ -8,6 +9,7 @@ from api import data_service
 router = APIRouter(prefix="/api/players", tags=["players"])
 
 PLAYER_COLUMN_MAP = {
+    "element_id": "element_id",
     "player_name": "name",
     "web_name": "web_name",
     "team_name": "team",
@@ -44,6 +46,7 @@ def _load_players() -> tuple[Any, list[str]]:
     if dataframe.empty:
         return dataframe, []
 
+    dataframe = _add_element_ids(dataframe)
     dataframe = _add_team_codes(dataframe)
 
     available_columns = list(dataframe.columns)
@@ -90,6 +93,57 @@ def _add_team_codes(dataframe):
         )
     dataframe["team_code"] = dataframe["team_code"].fillna(1).astype(int)
     return dataframe
+
+
+def _add_element_ids(dataframe):
+    if "element_id" in dataframe.columns:
+        return dataframe
+
+    bootstrap = data_service.bootstrap_static()
+    teams = bootstrap.get("teams", [])
+    team_by_id = {team.get("id"): team for team in teams}
+    exact: dict[tuple[str, str], int] = {}
+    name_only: dict[str, int | None] = {}
+
+    for player in bootstrap.get("elements", []):
+        team = team_by_id.get(player.get("team"), {})
+        short = _normalize(team.get("short_name"))
+        full_name = f"{player.get('first_name', '')} {player.get('second_name', '')}".strip()
+        names = {_normalize(full_name), _normalize(player.get("web_name"))}
+        for name in names:
+            if not name:
+                continue
+            exact[(name, short)] = player.get("id")
+            name_only[name] = player.get("id") if name not in name_only else None
+
+    def lookup(row: pd.Series) -> int | None:
+        row_names = [
+            _normalize(row.get("player_name")),
+            _normalize(row.get("web_name")),
+        ]
+        row_teams = [
+            _normalize(row.get("team_short_name")),
+            _normalize(row.get("team_name")),
+        ]
+        for row_name in row_names:
+            for row_team in row_teams:
+                found = exact.get((row_name, row_team))
+                if found is not None:
+                    return found
+        for row_name in row_names:
+            found = name_only.get(row_name)
+            if found is not None:
+                return found
+        return None
+
+    dataframe["element_id"] = dataframe.apply(lookup, axis=1)
+    return dataframe
+
+
+def _normalize(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    normalized = unicodedata.normalize("NFD", text)
+    return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
 
 
 def _captain_reasoning(row: pd.Series, rank: int) -> str:
@@ -183,5 +237,6 @@ def player_history(name: str) -> list[dict[str, Any]]:
 
     filtered = filtered.sort_values("gameweek").tail(10)
     output = filtered.rename(columns={"gameweek": "gw"})
-    columns = ["gw", "price", "total_points", "minutes", "selected_by_percent"]
+    output = output.rename(columns={"player_id": "element_id"})
+    columns = ["element_id", "gw", "price", "total_points", "minutes", "selected_by_percent"]
     return data_service.to_records(output[columns])

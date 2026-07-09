@@ -6,7 +6,8 @@ import { Panel } from "@/components/Panel";
 import { PitchView } from "@/components/PitchView";
 import { SectionHeader } from "@/components/SectionHeader";
 import { getCurrentGameweek, getSquad, getTeam } from "@/lib/api";
-import { points, price } from "@/lib/format";
+import { points, positionCode, price } from "@/lib/format";
+import { selectCurrentSquadMetrics } from "@/lib/squadMetrics";
 import type { SquadPlayer, TeamData } from "@/lib/types";
 
 export default function SquadPage() {
@@ -36,16 +37,18 @@ export default function SquadPage() {
     });
   }, []);
 
+  const metrics = useMemo(() => selectCurrentSquadMetrics(squad), [squad]);
+  const displayedSquad = useMemo(() => [...metrics.starters, ...metrics.bench], [metrics]);
   const averageByPosition = useMemo(() => {
     const averages: Record<string, number> = {};
     for (const position of ["GKP", "GK", "DEF", "MID", "FWD"]) {
-      const rows = squad.filter((player) => player.position === position);
+      const rows = displayedSquad.filter((player) => positionCode(player.position) === positionCode(position));
       averages[position] = rows.length
         ? rows.reduce((sum, player) => sum + (player.predicted_pts ?? 0), 0) / rows.length
         : 0;
     }
     return averages;
-  }, [squad]);
+  }, [displayedSquad]);
 
   if (!teamId) {
     return (
@@ -61,15 +64,13 @@ export default function SquadPage() {
   if (error) return <ErrorState />;
   if (!squad.length) return <EmptyState />;
 
-  const predictedTotal = squad.reduce((sum, player) => sum + (player.predicted_pts ?? 0), 0);
-
   return (
     <div>
       <SectionHeader title="My Squad" subtitle={team?.team_name ?? `Team #${teamId}`} />
       <Panel>
-        <PitchView squad={squad} averageByPosition={averageByPosition} showBench={showBench} />
+        <PitchView squad={displayedSquad} averageByPosition={averageByPosition} showBench={showBench} />
         <div className="-mt-px grid grid-cols-2 overflow-hidden rounded-b-[10px] border border-fpl-border bg-fpl-card lg:grid-cols-4">
-          <Summary label="Predicted GW Points" value={points(predictedTotal)} />
+          <Summary label="Starting XI xP" value={points(metrics.totalStartingXp)} />
           <Summary label="Squad Value" value={price(team?.squad_value)} />
           <Summary label="Bank" value={price(team?.bank_value)} />
           <Summary label="Overall Rank" value={team?.overall_rank?.toLocaleString() ?? "-"} />

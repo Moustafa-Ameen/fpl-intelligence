@@ -1,32 +1,27 @@
 "use client";
 
 import { ArrowRight, ChevronDown, TrendingDown, TrendingUp } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, ErrorState, LoadingState } from "@/components/LoadingState";
-import { MiniSparkline } from "@/components/MiniSparkline";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
 import { useDrawer } from "@/context/DrawerContext";
-import {
-  getCurrentGameweek,
-  getPlayerHistory,
-  getSquad,
-  getTeam,
-  getTransferTargets,
-} from "@/lib/api";
-import { kitUrl, points, positionCode, price } from "@/lib/format";
-import type { PlayerHistoryPoint, SquadPlayer, TeamData, TransferTarget } from "@/lib/types";
+import { getCurrentGameweek, getPlayers, getSquad, getTeam } from "@/lib/api";
+import { displayPlayerName, displayTeam, kitUrl, points, positionCode, price } from "@/lib/format";
+import { playerXp, selectCurrentSquadMetrics } from "@/lib/squadMetrics";
+import type { Player, SquadPlayer, TeamData } from "@/lib/types";
 
 type Tab = "best" | "prices";
 type PositionFilter = "All" | "GK" | "DEF" | "MID" | "FWD";
+type Candidate = Player;
 
 const positionFilters: PositionFilter[] = ["All", "GK", "DEF", "MID", "FWD"];
 
 export default function TransfersPage() {
   const { openDrawer } = useDrawer();
-  const [targets, setTargets] = useState<TransferTarget[]>([]);
-  const [history, setHistory] = useState<Record<string, PlayerHistoryPoint[]>>({});
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [squad, setSquad] = useState<SquadPlayer[]>([]);
   const [team, setTeam] = useState<TeamData | null>(null);
   const [teamConnected, setTeamConnected] = useState(false);
@@ -41,7 +36,7 @@ export default function TransfersPage() {
     queueMicrotask(() => setTeamConnected(Boolean(teamId)));
 
     Promise.all([
-      getTransferTargets(),
+      getPlayers({ limit: 1000, sort_by: "transfer_score" }),
       teamId
         ? getCurrentGameweek()
             .then((gw) => getSquad(teamId, gw.current_gw ?? 1))
@@ -49,72 +44,57 @@ export default function TransfersPage() {
         : Promise.resolve([]),
       teamId ? getTeam(teamId).catch(() => null) : Promise.resolve(null),
     ])
-      .then(async ([targetRows, squadRows, teamData]) => {
-        setTargets(targetRows);
+      .then(([playerRows, squadRows, teamData]) => {
+        setCandidates(playerRows);
         setSquad(squadRows);
         setTeam(teamData);
-        const pairs = await Promise.all(
-          targetRows.slice(0, 25).map((player) =>
-            getPlayerHistory(player.name)
-              .then((rows) => [player.name, rows] as const)
-              .catch(() => [player.name, []] as const),
-          ),
-        );
-        setHistory(Object.fromEntries(pairs));
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, []);
 
-  const squadNames = useMemo(() => new Set(squad.map((player) => player.name)), [squad]);
-  const weakestPlayer = useMemo(
-    () => [...squad].sort((a, b) => predicted(a) - predicted(b))[0] ?? null,
-    [squad],
+  const squadKeys = useMemo(() => new Set(squad.map(playerKey)), [squad]);
+  const squadMetrics = useMemo(() => selectCurrentSquadMetrics(squad), [squad]);
+  const displayedSquad = useMemo(() => [...squadMetrics.starters, ...squadMetrics.bench], [squadMetrics]);
+  const upgradeGroups = useMemo(
+    () => buildUpgradeGroups(displayedSquad, candidates, squadKeys),
+    [candidates, displayedSquad, squadKeys],
   );
-  const weakestPosition = weakestPlayer ? positionCode(weakestPlayer.position) : null;
-  const allUpgradeGroups = useMemo(
-    () => buildUpgradeGroups(squad, targets, squadNames),
-    [squad, squadNames, targets],
+  const visibleUpgradeGroups = useMemo(
+    () => upgradeGroups.filter((group) => position === "All" || group.position === position),
+    [position, upgradeGroups],
   );
-  const primaryUpgrades = useMemo(() => {
-    if (!weakestPlayer || !weakestPosition) return [];
-    return replacementsFor(weakestPlayer, targets, squadNames).slice(0, 2);
-  }, [squadNames, targets, weakestPlayer, weakestPosition]);
+  const renderedUpgradeGroups = useMemo(
+    () =>
+      visibleUpgradeGroups.map((group) => ({
+        ...group,
+        replacements: group.replacements.slice(0, expanded ? 3 : position === "All" ? 1 : 2),
+      })),
+    [expanded, position, visibleUpgradeGroups],
+  );
   const topTargets = useMemo(
     () =>
-      [...targets]
+      [...candidates]
+        .filter((player) => !squadKeys.has(playerKey(player)))
         .sort((a, b) => (b.transfer_score ?? 0) - (a.transfer_score ?? 0))
         .slice(0, 15),
-    [targets],
+    [candidates, squadKeys],
   );
-  const risers = useMemo(
-    () =>
-      [...targets]
-        .sort((a, b) => moverScore(b) - moverScore(a))
-        .slice(0, 5),
-    [targets],
-  );
-  const fallers = useMemo(
-    () =>
-      [...targets]
-        .filter((player) => (player.selected_by_percent ?? 0) >= 5)
-        .sort((a, b) => (a.form ?? 0) - (b.form ?? 0))
-        .slice(0, 5),
-    [targets],
-  );
+  const risers = useMemo(() => buildRisers(candidates), [candidates]);
+  const fallers = useMemo(() => buildFallers(candidates, new Set(risers.map((player) => player.name))), [candidates, risers]);
 
   if (loading) return <LoadingState />;
   if (error) return <ErrorState />;
-  if (!targets.length) return <EmptyState />;
+  if (!candidates.length) return <EmptyState />;
 
   return (
     <div className="space-y-6">
       <SectionHeader
         title="Who should I bring in?"
-        subtitle="Squad-aware upgrades, top transfer targets, and price movement signals."
+        subtitle="Squad-aware upgrades, top transfer targets, and separated price movement signals."
       />
 
-      <div className="rounded-lg border border-fpl-border bg-fpl-card/95 p-4 text-sm text-secondary">
+      <div className="rounded-xl border border-fpl-border bg-[linear-gradient(135deg,rgba(0,255,135,0.08),rgba(255,255,255,0.025))] p-4 text-sm text-secondary shadow-[0_16px_40px_rgba(0,0,0,0.26)]">
         Remember: transfers beyond your free allowance cost <span className="font-mono text-fpl-red">-4 pts</span>{" "}
         each.{" "}
         {team?.free_transfers_available !== null && team?.free_transfers_available !== undefined
@@ -139,7 +119,7 @@ export default function TransfersPage() {
                 <div>
                   <h2 className="text-[18px] font-semibold text-primary">Upgrade your squad</h2>
                   <p className="mt-1 text-[13px] text-secondary">
-                    Realistic replacements based on your weakest projected player.
+                    One outgoing player per position, with higher-projected replacements from the full player pool.
                   </p>
                 </div>
                 <div className="flex rounded-lg border border-fpl-border bg-fpl-raised p-1">
@@ -151,57 +131,55 @@ export default function TransfersPage() {
                 </div>
               </div>
 
-              {weakestPlayer ? (
-                <div className="space-y-3">
-                  <div className="rounded-lg border border-fpl-border bg-fpl-raised/60 p-3 text-sm text-secondary">
-                    Weakest current projection:{" "}
-                    <span className="font-semibold text-primary">{weakestPlayer.name}</span>{" "}
-                    <span className="text-muted">({weakestPlayer.team}, {points(predicted(weakestPlayer))} pts)</span>
-                  </div>
-
-                  {(position === "All" || position === weakestPosition ? primaryUpgrades : []).map((upgrade) => (
-                    <UpgradeRow key={`${upgrade.outgoing.name}-${upgrade.incoming.name}`} upgrade={upgrade} onSelect={openDrawer} />
-                  ))}
-
-                  {primaryUpgrades.length === 0 ? (
-                    <p className="text-sm text-muted">No realistic same-position upgrades found within £1.5m.</p>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    onClick={() => setExpanded((value) => !value)}
-                    className="inline-flex items-center gap-1 text-sm font-semibold text-fpl-green hover:text-primary"
-                  >
-                    See more options
-                    <ChevronDown className={`h-4 w-4 transition ${expanded ? "rotate-180" : ""}`} />
-                  </button>
-
-                  {expanded ? (
-                    <div className="space-y-5 border-t border-white/[0.06] pt-4">
-                      {allUpgradeGroups
-                        .filter((group) => position === "All" || group.position === position)
-                        .map((group) => (
-                          <div key={group.position}>
-                            <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.12em] text-muted">
-                              {group.position} upgrades
-                            </h3>
-                            <div className="space-y-3">
-                              {group.replacements.map((upgrade) => (
-                                <UpgradeRow
-                                  key={`${group.position}-${upgrade.outgoing.name}-${upgrade.incoming.name}`}
-                                  upgrade={upgrade}
-                                  onSelect={openDrawer}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        ))}
+              <div className="space-y-5">
+                {renderedUpgradeGroups.map((group) => (
+                  <div key={group.position} className="rounded-xl border border-white/[0.06] bg-black/10 p-3">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-muted">
+                          {group.position} upgrade
+                        </h3>
+                        {group.outgoing ? (
+                          <p className="mt-1 text-sm text-secondary">
+                            Outgoing benchmark:{" "}
+                            <span className="font-semibold text-primary">
+                              {displayPlayerName(group.outgoing.name, group.outgoing.web_name)}
+                            </span>{" "}
+                            <span className="text-muted">
+                              ({displayTeam(group.outgoing.team, group.outgoing.name)}, {points(predicted(group.outgoing))} pts)
+                            </span>
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
-                  ) : null}
-                </div>
-              ) : (
-                <p className="text-sm text-muted">Connect your FPL team ID to see squad upgrades.</p>
-              )}
+
+                    {group.replacements.length ? (
+                      <div className="space-y-3">
+                        {group.replacements.map((upgrade) => (
+                          <UpgradeRow
+                            key={`${group.position}-${upgrade.outgoing.name}-${upgrade.incoming.name}`}
+                            upgrade={upgrade}
+                            onSelect={openDrawer}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-fpl-border bg-[#161616] p-4 text-sm text-muted">
+                        No higher-projected {group.position} replacement is close enough in price right now.
+                      </p>
+                    )}
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => setExpanded((value) => !value)}
+                  className="inline-flex items-center gap-1 text-sm font-semibold text-fpl-green hover:text-primary"
+                >
+                  {expanded ? "Show fewer options" : "See more options"}
+                  <ChevronDown className={`h-4 w-4 transition ${expanded ? "rotate-180" : ""}`} />
+                </button>
+              </div>
             </Panel>
           ) : (
             <Panel>
@@ -214,7 +192,9 @@ export default function TransfersPage() {
           <Panel>
             <div className="mb-4">
               <h2 className="text-[18px] font-semibold text-primary">Top picks regardless of squad</h2>
-              <p className="mt-1 text-[13px] text-secondary">Top 15 players by transfer score.</p>
+              <p className="mt-1 text-[13px] text-secondary">
+                Top 15 by transfer score. Signal replaces the old flat trend line.
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
@@ -228,7 +208,7 @@ export default function TransfersPage() {
                     <th className="pb-3 pr-3 text-right">Predicted</th>
                     <th className="pb-3 pr-3 text-right">Start %</th>
                     <th className="pb-3 pr-3 text-right">Ownership</th>
-                    <th className="pb-3 text-right">Trend</th>
+                    <th className="pb-3 text-right">Signal</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -241,30 +221,32 @@ export default function TransfersPage() {
                       }`}
                     >
                       <td className="py-3 pr-3">
-                        <img src={kitUrl(player.team_code)} alt={`${player.team} kit`} className="h-10 w-10 object-contain" />
+                        <img
+                          src={kitUrl(player.team_code, player.team, player.name)}
+                          alt={`${displayTeam(player.team, player.name)} kit`}
+                          className="h-10 w-10 object-contain"
+                        />
                       </td>
                       <td className="py-3 pr-3 font-semibold text-primary">
-                        {player.name}
+                        {displayPlayerName(player.name, player.web_name)}
                         {player.start_likelihood < 0.4 ? (
                           <span className="ml-2 rounded bg-fpl-amber/15 px-2 py-1 text-[11px] text-fpl-amber">
                             rotation risk
                           </span>
                         ) : null}
                       </td>
-                      <td className="py-3 pr-3 text-muted">{player.team}</td>
+                      <td className="py-3 pr-3 text-muted">{displayTeam(player.team, player.name)}</td>
                       <td className="py-3 pr-3 text-muted">{positionCode(player.position)}</td>
                       <td className="py-3 pr-3 text-right font-mono text-primary">{price(player.price)}</td>
-                      <td className="py-3 pr-3 text-right font-mono text-fpl-green">
-                        {points(projected(player))}
-                      </td>
+                      <td className="py-3 pr-3 text-right font-mono text-fpl-green">{points(projected(player))}</td>
                       <td className="py-3 pr-3 text-right">
                         <StartLikelihood value={player.start_likelihood} />
                       </td>
                       <td className="py-3 pr-3 text-right font-mono text-primary">
                         {points(player.selected_by_percent, 0)}%
                       </td>
-                      <td className="w-[74px] py-3 text-right">
-                        <MiniSparkline data={(history[player.name] ?? []).slice(-5)} dataKey="price" color="#00FF87" height={34} />
+                      <td className="py-3 text-right">
+                        <TransferSignal player={player} />
                       </td>
                     </tr>
                   ))}
@@ -326,20 +308,26 @@ function PlayerTransferSide({
   label,
   onSelect,
 }: {
-  player: SquadPlayer | TransferTarget;
+  player: SquadPlayer | Candidate;
   label: "OUT" | "IN";
   onSelect: (name: string) => void;
 }) {
   return (
     <button type="button" onClick={() => onSelect(player.name)} className="flex min-w-0 items-center gap-3 text-left">
-      <img src={kitUrl(player.team_code)} alt={`${player.team} kit`} className="h-12 w-12 shrink-0 object-contain" />
+      <img
+        src={kitUrl(player.team_code, player.team, player.name)}
+        alt={`${displayTeam(player.team, player.name)} kit`}
+        className="h-12 w-12 shrink-0 object-contain"
+      />
       <div className="min-w-0">
         <div className={`text-[10px] font-bold ${label === "OUT" ? "text-fpl-red" : "text-fpl-green"}`}>
           {label}
         </div>
-        <div className="truncate text-sm font-semibold text-primary">{player.name}</div>
+        <div className="truncate text-sm font-semibold text-primary">
+          {displayPlayerName(player.name, "web_name" in player ? player.web_name : undefined)}
+        </div>
         <div className="truncate text-xs text-muted">
-          {player.team} · {price(player.price ?? null)}
+          {displayTeam(player.team, player.name)} · {price(player.price ?? null)}
         </div>
       </div>
     </button>
@@ -354,8 +342,8 @@ function PriceMoverPanel({
   onSelect,
 }: {
   title: string;
-  icon: React.ReactNode;
-  rows: TransferTarget[];
+  icon: ReactNode;
+  rows: Candidate[];
   tone: "green" | "red";
   onSelect: (name: string) => void;
 }) {
@@ -367,7 +355,9 @@ function PriceMoverPanel({
             {icon}
             {title}
           </h2>
-          <p className="mt-1 text-[11px] italic text-muted">Rule-based estimate — not a model prediction</p>
+          <p className="mt-1 text-[11px] italic text-muted">
+            Rule-based estimate from ownership, minutes security, and model signal.
+          </p>
         </div>
       </div>
       <div className="space-y-3">
@@ -378,10 +368,17 @@ function PriceMoverPanel({
             onClick={() => onSelect(player.name)}
             className="grid w-full grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-fpl-border bg-[#161616] p-3 text-left hover:bg-fpl-raised"
           >
-            <img src={kitUrl(player.team_code)} alt={`${player.team} kit`} className="h-10 w-10 object-contain" />
+            <img
+              src={kitUrl(player.team_code, player.team, player.name)}
+              alt={`${displayTeam(player.team, player.name)} kit`}
+              className="h-10 w-10 object-contain"
+            />
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-primary">{player.name}</div>
+              <div className="truncate text-sm font-semibold text-primary">
+                {displayPlayerName(player.name, player.web_name)}
+              </div>
               <div className="mt-1 flex items-center gap-3 text-xs text-muted">
+                <span>{displayTeam(player.team, player.name)}</span>
                 <span>{price(player.price)}</span>
                 <div className="h-1.5 w-24 rounded bg-fpl-border">
                   <div
@@ -391,12 +388,38 @@ function PriceMoverPanel({
                 </div>
               </div>
             </div>
-            <div className="font-mono text-sm text-primary">{points(player.selected_by_percent, 0)}%</div>
+            <div className="text-right">
+              <div className="font-mono text-sm text-primary">{points(player.selected_by_percent, 0)}%</div>
+              <div className={`text-[11px] ${tone === "green" ? "text-fpl-green" : "text-fpl-red"}`}>
+                {tone === "green" ? "rise signal" : "drop signal"}
+              </div>
+            </div>
           </button>
         ))}
       </div>
     </Panel>
   );
+}
+
+function TransferSignal({ player }: { player: Candidate }) {
+  const start = player.start_likelihood ?? 0;
+  const score = player.transfer_score ?? 0;
+  if (start < 0.4) return <SignalPill tone="amber">Minutes risk</SignalPill>;
+  if (score >= 0.45) return <SignalPill tone="green">Strong buy</SignalPill>;
+  if ((player.selected_by_percent ?? 0) >= 25) return <SignalPill tone="gold">Template</SignalPill>;
+  return <SignalPill tone="muted">Watch</SignalPill>;
+}
+
+function SignalPill({ tone, children }: { tone: "green" | "gold" | "amber" | "muted"; children: ReactNode }) {
+  const className =
+    tone === "green"
+      ? "border-fpl-green/30 bg-fpl-green/10 text-fpl-green"
+      : tone === "gold"
+        ? "border-fpl-gold/30 bg-fpl-gold/10 text-fpl-gold"
+        : tone === "amber"
+          ? "border-fpl-amber/30 bg-fpl-amber/10 text-fpl-amber"
+          : "border-fpl-border bg-fpl-raised text-muted";
+  return <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${className}`}>{children}</span>;
 }
 
 function Toggle({
@@ -406,7 +429,7 @@ function Toggle({
 }: {
   active: boolean;
   onClick: () => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -421,47 +444,41 @@ function Toggle({
   );
 }
 
+interface UpgradeGroup {
+  position: PositionFilter;
+  outgoing: SquadPlayer | null;
+  replacements: Upgrade[];
+}
+
 interface Upgrade {
   outgoing: SquadPlayer;
-  incoming: TransferTarget;
+  incoming: Candidate;
   delta: number;
 }
 
-function buildUpgradeGroups(
-  squad: SquadPlayer[],
-  targets: TransferTarget[],
-  squadNames: Set<string>,
-): { position: string; replacements: Upgrade[] }[] {
+function buildUpgradeGroups(squad: SquadPlayer[], candidates: Candidate[], squadKeys: Set<string>): UpgradeGroup[] {
   return positionFilters
-    .filter((item) => item !== "All")
-    .flatMap((position) => {
-      const outgoing = squad
-        .filter((player) => positionCode(player.position) === position)
-        .sort((a, b) => predicted(a) - predicted(b))[0];
-      if (!outgoing) return [];
-      const replacements = replacementsFor(outgoing, targets, squadNames).slice(0, 3);
-      return replacements.length ? [{ position, replacements }] : [];
+    .filter((item): item is Exclude<PositionFilter, "All"> => item !== "All")
+    .map((position) => {
+      const outgoing =
+        squad
+          .filter((player) => positionCode(player.position) === position)
+          .sort((a, b) => predicted(a) - predicted(b))[0] ?? null;
+      return {
+        position,
+        outgoing,
+        replacements: outgoing ? replacementsFor(outgoing, candidates, squadKeys) : [],
+      };
     });
 }
 
-function replacementsFor(
-  outgoing: SquadPlayer,
-  targets: TransferTarget[],
-  squadNames: Set<string>,
-): Upgrade[] {
+function replacementsFor(outgoing: SquadPlayer, candidates: Candidate[], squadKeys: Set<string>): Upgrade[] {
   const outgoingProjection = predicted(outgoing);
-  const outgoingPrice = outgoing.price ?? 0;
-  return targets
-    .filter((target) => {
-      const priceGap = Math.abs(target.price - outgoingPrice);
-      return (
-        !squadNames.has(target.name) &&
-        positionCode(target.position) === positionCode(outgoing.position) &&
-        projected(target) > outgoingProjection &&
-        priceGap <= 1.5
-      );
-    })
-    .sort((a, b) => (b.transfer_score ?? 0) - (a.transfer_score ?? 0))
+  const strict = replacementCandidates(outgoing, candidates, squadKeys, 1.5);
+  const pool = strict.length ? strict : replacementCandidates(outgoing, candidates, squadKeys, 3);
+  return pool
+    .sort((a, b) => projected(b) - projected(a) || (b.transfer_score ?? 0) - (a.transfer_score ?? 0))
+    .slice(0, 3)
     .map((incoming) => ({
       outgoing,
       incoming,
@@ -469,15 +486,70 @@ function replacementsFor(
     }));
 }
 
+function replacementCandidates(
+  outgoing: SquadPlayer,
+  candidates: Candidate[],
+  squadKeys: Set<string>,
+  budgetWindow: number,
+): Candidate[] {
+  const outgoingProjection = predicted(outgoing);
+  const outgoingPrice = outgoing.price ?? 0;
+  return candidates.filter((candidate) => {
+    const priceGap = Math.abs(candidate.price - outgoingPrice);
+    return (
+      !squadKeys.has(playerKey(candidate)) &&
+      positionCode(candidate.position) === positionCode(outgoing.position) &&
+      projected(candidate) > outgoingProjection &&
+      priceGap <= budgetWindow &&
+      (candidate.start_likelihood ?? 0) >= 0.35
+    );
+  });
+}
+
+function buildRisers(candidates: Candidate[]): Candidate[] {
+  return [...candidates]
+    .filter((player) => (player.selected_by_percent ?? 0) > 0 && player.total_points > 0 && player.start_likelihood >= 0.65)
+    .sort((a, b) => riseScore(b) - riseScore(a))
+    .slice(0, 5);
+}
+
+function buildFallers(candidates: Candidate[], riserNames: Set<string>): Candidate[] {
+  return [...candidates]
+    .filter((player) => {
+      if (riserNames.has(player.name)) return false;
+      const ownedEnough = (player.selected_by_percent ?? 0) >= 1;
+      const weakSignal = player.start_likelihood < 0.45 || player.transfer_score < 0.05 || player.total_points <= 15;
+      return ownedEnough && weakSignal;
+    })
+    .sort((a, b) => dropScore(b) - dropScore(a))
+    .slice(0, 5);
+}
+
 function predicted(player: SquadPlayer): number {
-  return player.predicted_pts ?? 0;
+  return playerXp(player);
 }
 
-function projected(player: TransferTarget): number {
-  return player.adjusted_pts ?? player.predicted_pts ?? player.transfer_score ?? 0;
+function projected(player: Candidate): number {
+  return (player.ppg ?? 0) * (player.start_likelihood ?? 0);
 }
 
-function moverScore(player: TransferTarget): number {
-  return (player.selected_by_percent ?? 0) * (player.form ?? 0);
+function riseScore(player: Candidate): number {
+  return (
+    (player.transfer_score ?? 0) * 100 +
+    (player.start_likelihood ?? 0) * 16 +
+    (player.ppg ?? 0) * 3 +
+    Math.min(player.selected_by_percent ?? 0, 35) * 0.2
+  );
 }
 
+function dropScore(player: Candidate): number {
+  return (
+    Math.min(player.selected_by_percent ?? 0, 35) * 1.2 +
+    (1 - (player.start_likelihood ?? 0)) * 30 +
+    Math.max(0, 0.08 - (player.transfer_score ?? 0)) * 100
+  );
+}
+
+function playerKey(player: Pick<Player, "element_id" | "name"> | Pick<SquadPlayer, "element_id" | "name">): string {
+  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
+}

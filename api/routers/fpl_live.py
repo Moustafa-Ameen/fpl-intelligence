@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from api import data_service, fpl_client
+from api.routers.fixtures import fixture_source_state
 from api.routers.predictions import BEST_MODEL
 
 router = APIRouter(prefix="/api/fpl", tags=["fpl-live"])
@@ -22,10 +23,55 @@ def _current_gameweek_from_bootstrap(bootstrap: dict[str, Any]) -> int | None:
     return max(finished, default=0) + 1 if finished else None
 
 
+def _next_gameweek_from_bootstrap(bootstrap: dict[str, Any]) -> int | None:
+    events = bootstrap.get("events", [])
+    next_event = next((event for event in events if event.get("is_next")), None)
+    if next_event:
+        return next_event.get("id")
+
+    current = next((event for event in events if event.get("is_current")), None)
+    if current and current.get("id"):
+        return min(int(current["id"]) + 1, 38)
+
+    current_gameweek = _current_gameweek_from_bootstrap(bootstrap)
+    return min(current_gameweek + 1, 38) if current_gameweek else None
+
+
+def _season_label_from_bootstrap(bootstrap: dict[str, Any]) -> str:
+    deadlines = [
+        event.get("deadline_time")
+        for event in bootstrap.get("events", [])
+        if event.get("deadline_time")
+    ]
+    if not deadlines:
+        return "unknown"
+
+    year = int(str(min(deadlines))[:4])
+    return f"{year}-{str(year + 1)[-2:]}"
+
+
 @router.get("/current-gw")
 async def current_gameweek() -> dict[str, int | None]:
     bootstrap = await fpl_client.get_bootstrap()
     return {"current_gw": _current_gameweek_from_bootstrap(bootstrap)}
+
+
+@router.get("/season-state")
+async def season_state() -> dict[str, Any]:
+    bootstrap = await fpl_client.get_bootstrap()
+    fixture_state = await fixture_source_state()
+    return {
+        "fpl_api_season": _season_label_from_bootstrap(bootstrap),
+        "fixture_source": fixture_state["source"],
+        "fixture_season": fixture_state["season"],
+        "difficulty_source": fixture_state["difficulty_source"],
+        "current_gw": _current_gameweek_from_bootstrap(bootstrap),
+        "next_gw": _next_gameweek_from_bootstrap(bootstrap),
+        "data_freshness": {
+            "fpl_api": "live",
+            "fixtures": fixture_state["freshness"],
+        },
+    }
 
 
 @router.get("/team/{team_id}")
@@ -66,6 +112,7 @@ async def squad(team_id: int, gw: int = Query(..., ge=1, le=38)) -> list[dict[st
 
         squad_rows.append(
             {
+                "element_id": player.get("id"),
                 "name": player_name,
                 "web_name": player.get("web_name") or player_name,
                 "position": position_row.get("singular_name_short")
@@ -82,6 +129,16 @@ async def squad(team_id: int, gw: int = Query(..., ge=1, le=38)) -> list[dict[st
         )
 
     return squad_rows
+
+
+@router.get("/team/{team_id}/history")
+async def team_history(team_id: int) -> dict[str, Any]:
+    return await fpl_client.get_team_history(team_id)
+
+
+@router.get("/team/{team_id}/transfers")
+async def team_transfers(team_id: int) -> list[dict[str, Any]]:
+    return await fpl_client.get_team_transfers(team_id)
 
 
 def _predictions_by_name(gw: int) -> dict[str, dict[str, Any]]:

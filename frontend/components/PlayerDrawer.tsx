@@ -61,12 +61,21 @@ export function PlayerDrawer() {
       const found =
         players.find((row) => row.name.toLowerCase() === playerName.toLowerCase()) ??
         players.find((row) => row.name.toLowerCase().includes(playerName.toLowerCase()));
-      const rankIndex = predictions.findIndex((row) => row.name.toLowerCase() === playerName.toLowerCase());
+      const idRankIndex = found
+        ? predictions.findIndex((row) => playerKey(row) === playerKey(found))
+        : -1;
+      const rankIndex = idRankIndex >= 0
+        ? idRankIndex
+        : predictions.findIndex((row) => row.name.toLowerCase() === playerName.toLowerCase());
       setPlayer(found ?? null);
       setPrediction(predictions[rankIndex] ?? null);
       setCaptainRank(rankIndex >= 0 ? rankIndex + 1 : null);
       setHistory(historyRows);
-      setFixtures(found ? fixtureRows.find((row) => row.team === found.team) ?? null : null);
+      setFixtures(
+        found
+          ? fixtureRows.find((row) => row.team_short === found.team || row.team === found.team) ?? null
+          : null,
+      );
       const watchlist = JSON.parse(window.localStorage.getItem("watchlist") ?? "[]") as string[];
       setWatching(watchlist.includes(playerName));
     })
@@ -215,6 +224,10 @@ export function PlayerDrawer() {
       </aside>
     </div>
   );
+}
+
+function playerKey(player: Pick<Player, "element_id" | "name"> | Pick<CaptainPick, "element_id" | "name">): string {
+  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
 }
 
 function PlayerDrawerSkeleton() {

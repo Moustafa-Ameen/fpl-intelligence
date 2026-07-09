@@ -35,5 +35,13 @@ async def get_team_picks(team_id: int, gw: int) -> dict[str, Any]:
     return await _get(f"entry/{team_id}/event/{gw}/picks/")
 
 
+async def get_team_history(team_id: int) -> dict[str, Any]:
+    return await _get(f"entry/{team_id}/history/")
+
+
+async def get_team_transfers(team_id: int) -> list[dict[str, Any]]:
+    return await _get(f"entry/{team_id}/transfers/")
+
+
 async def get_live_gw(gw: int) -> dict[str, Any]:
     return await _get(f"event/{gw}/live/")

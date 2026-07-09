@@ -9,6 +9,7 @@ router = APIRouter(prefix="/api/predictions", tags=["predictions"])
 
 BEST_MODEL = "Gradient Boosting Regressor"
 PREDICTION_COLUMNS = {
+    "player_id": "element_id",
     "player_name": "name",
     "team": "team",
     "position": "position",
@@ -50,11 +51,13 @@ def transfers() -> list[dict[str, Any]]:
 
     players = players.sort_values("transfer_score", ascending=False).head(40).copy()
     if predictions.empty:
+        players["element_id"] = None
         players["predicted_pts"] = None
         players["adjusted_pts"] = None
         players["start_likelihood"] = players.get("minutes_security")
     else:
         prediction_columns = [
+            "player_id",
             "player_name",
             "predicted_points",
             "expected_points_adjusted",
@@ -64,6 +67,7 @@ def transfers() -> list[dict[str, Any]]:
         players = players.merge(latest_predictions, on="player_name", how="left")
         players = players.rename(
             columns={
+                "player_id": "element_id",
                 "predicted_points": "predicted_pts",
                 "expected_points_adjusted": "adjusted_pts",
                 "probability_60_plus_minutes": "start_likelihood",
@@ -80,6 +84,7 @@ def transfers() -> list[dict[str, Any]]:
     )
     columns = [
         "name",
+        "element_id",
         "team",
         "position",
         "price",

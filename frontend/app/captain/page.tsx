@@ -40,12 +40,13 @@ export default function CaptainPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const squadNames = useMemo(() => new Set(squad.map((player) => player.name.toLowerCase())), [squad]);
+  const squadKeys = useMemo(() => new Set(squad.map(playerKey)), [squad]);
   const squadCaptainRows = useMemo(
     () =>
       squad
         .map((player) => {
-          const prediction = picks.find((pick) => pick.name.toLowerCase() === player.name.toLowerCase());
+          const prediction = picks.find((pick) => playerKey(pick) === playerKey(player))
+            ?? picks.find((pick) => pick.name.toLowerCase() === player.name.toLowerCase());
           return toCaptainPick(player, prediction);
         })
         .sort((a, b) => score(b) - score(a)),
@@ -60,7 +61,7 @@ export default function CaptainPage() {
   const globalTop = picks[0];
   const heroPick = rankingRows[0] ?? globalTop;
   const viceCaptain = rankingRows.find((player) => player.name !== heroPick.name);
-  const globalTopNotOwned = teamConnected && globalTop && !squadNames.has(globalTop.name.toLowerCase());
+  const globalTopNotOwned = teamConnected && globalTop && !squadKeys.has(playerKey(globalTop));
 
   return (
     <div className="space-y-6">
@@ -100,7 +101,7 @@ export default function CaptainPage() {
               {points(score(heroPick))}
             </div>
             <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
-              Adjusted score
+              Raw xP projection
             </div>
             <div className="mt-4 inline-flex rounded-full bg-fpl-green/15 px-3 py-1">
               <StartLikelihood value={heroPick.start_likelihood} />
@@ -136,7 +137,7 @@ export default function CaptainPage() {
                 <th className="pb-3 pr-3">Team</th>
                 <th className="pb-3 pr-3 text-right">Predicted Pts</th>
                 <th className="pb-3 pr-3 text-right">Start %</th>
-                <th className="pb-3 text-right">Score</th>
+                <th className="pb-3 text-right">Raw xP</th>
               </tr>
             </thead>
             <tbody>
@@ -212,6 +213,7 @@ export default function CaptainPage() {
 function toCaptainPick(player: SquadPlayer, prediction?: CaptainPick): CaptainPick {
   return {
     name: player.name,
+    element_id: player.element_id,
     team: prediction?.team ?? player.team,
     position: prediction?.position ?? player.position,
     price: prediction?.price ?? player.price ?? undefined,
@@ -220,12 +222,13 @@ function toCaptainPick(player: SquadPlayer, prediction?: CaptainPick): CaptainPi
     predicted_pts: prediction?.predicted_pts ?? player.predicted_pts ?? 0,
     adjusted_pts: prediction?.adjusted_pts ?? prediction?.captain_score ?? player.predicted_pts ?? 0,
     team_code: prediction?.team_code ?? player.team_code,
+    web_name: prediction?.web_name ?? player.web_name,
     reasoning: prediction?.reasoning ?? "Best captain option from your connected squad.",
   };
 }
 
 function score(player: CaptainPick): number {
-  return player.adjusted_pts ?? player.captain_score ?? player.predicted_pts ?? 0;
+  return player.predicted_pts ?? player.adjusted_pts ?? player.captain_score ?? 0;
 }
 
 function MethodStep({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
@@ -239,3 +242,6 @@ function MethodStep({ label, value, accent = false }: { label: string; value: st
   );
 }
 
+function playerKey(player: Pick<CaptainPick, "element_id" | "name"> | Pick<SquadPlayer, "element_id" | "name">): string {
+  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
+}

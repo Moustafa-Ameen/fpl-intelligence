@@ -399,7 +399,7 @@ def page_overview() -> None:
         suggestions = dl.get_transfer_suggestions(predictions, players, model, gameweek)
         for _, row in suggestions.iterrows():
             out_meta = f"xP {row['out_xp']:.1f} - {row['reason']}"
-            in_meta = f"xP {row['in_xp']:.1f} - GBP {row['in_price']:.1f}"
+            in_meta = f"xP {row['in_xp']:.1f} - £{row['in_price']:.1f}m"
             net_gain = f"{row['net_gain']:+.1f} pts (after -4 hit if applicable)"
             st.markdown(
                 f"""

@@ -150,7 +150,7 @@ export default function SettingsPage() {
             <p>FPL Intelligence v1.0</p>
             <p>Built with Python, FastAPI, and Next.js</p>
             <p>Model: Gradient Boosting trained on 85,000+ player-gameweek rows</p>
-            <p>Backtest: 2025-26 season, GW2-GW38</p>
+            <p>Backtest: historical 2025-26 season</p>
           </div>
         </Panel>
       </div>

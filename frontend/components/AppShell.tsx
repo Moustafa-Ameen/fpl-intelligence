@@ -42,7 +42,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Menu className="h-5 w-5" />
       </button>
       <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
-      <main className="decision-grid min-h-screen px-4 pb-4 pt-16 md:ml-[72px] md:px-6 md:py-4 lg:ml-[220px] lg:px-9 lg:py-7">
+      <main className="decision-grid min-h-screen px-4 pb-4 pt-16 md:ml-[76px] md:px-6 md:py-4 lg:ml-[244px] lg:px-9 lg:py-7">
         <div className="mx-auto max-w-[1400px]">
           <LiveMatchBar />
           {children}

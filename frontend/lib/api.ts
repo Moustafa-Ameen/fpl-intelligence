@@ -6,6 +6,7 @@ import type {
   FixtureTick,
   Player,
   PlayerHistoryPoint,
+  SeasonState,
   SquadPlayer,
   TeamData,
   Top10Metric,
@@ -24,6 +25,10 @@ async function fetchJson<T>(path: string): Promise<T> {
 
 export async function getCurrentGameweek(): Promise<{ current_gw: number | null }> {
   return fetchJson("/api/fpl/current-gw");
+}
+
+export async function getSeasonState(): Promise<SeasonState> {
+  return fetchJson("/api/fpl/season-state");
 }
 
 export async function getPlayers(params?: {
@@ -51,8 +56,9 @@ export async function getDifferentials(): Promise<TransferTarget[]> {
   return fetchJson("/api/players/differentials");
 }
 
-export async function getFixtureTicker(): Promise<FixtureTick[]> {
-  return fetchJson("/api/fixtures/ticker");
+export async function getFixtureTicker(range?: number): Promise<FixtureTick[]> {
+  const suffix = range ? `?range=${range}` : "";
+  return fetchJson(`/api/fixtures/ticker${suffix}`);
 }
 
 export async function getFixtures(): Promise<Fixture[]> {
@@ -82,6 +88,14 @@ export async function getTeam(teamId: string): Promise<TeamData> {
 
 export async function getSquad(teamId: string, gw: number): Promise<SquadPlayer[]> {
   return fetchJson(`/api/fpl/team/${teamId}/squad?gw=${gw}`);
+}
+
+export async function getTeamHistory(teamId: string): Promise<unknown> {
+  return fetchJson(`/api/fpl/team/${teamId}/history`);
+}
+
+export async function getTeamTransfers(teamId: string): Promise<unknown[]> {
+  return fetchJson(`/api/fpl/team/${teamId}/transfers`);
 }
 
 export async function getAccuracy(): Promise<AccuracyResult[]> {

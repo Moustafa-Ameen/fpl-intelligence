@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { FixtureChip } from "@/components/FixtureChip";
 import { LoadingState, ErrorState } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
 import { useDrawer } from "@/context/DrawerContext";
 import { getCurrentGameweek, getFixtureTicker, getSquad } from "@/lib/api";
-import { fixtureTickerWithFallback, visibleFixtures } from "@/lib/fixtures";
+import { fixtureTickerRows, visibleFixtures } from "@/lib/fixtures";
 import type { FixtureTick, SquadPlayer } from "@/lib/types";
 
 type FixtureRange = 3 | 5 | 8;
@@ -55,7 +56,8 @@ export default function FixturesPage() {
     };
   }, []);
 
-  const fixtureRows = useMemo(() => fixtureTickerWithFallback(fixtures), [fixtures]);
+  const fixtureRows = useMemo(() => fixtureTickerRows(fixtures), [fixtures]);
+  const fixtureMeta = fixtureRows[0];
   const squadFixtureRows = useMemo(
     () =>
       squad
@@ -66,7 +68,7 @@ export default function FixturesPage() {
           const average = averageDifficulty(upcoming);
           return { player, fixtures: upcoming, average };
         })
-        .sort((a, b) => a.average - b.average),
+        .sort((a, b) => (a.average ?? 99) - (b.average ?? 99)),
     [fixtureRows, squad],
   );
   const targetTeams = useMemo(
@@ -77,7 +79,7 @@ export default function FixturesPage() {
           const average = averageDifficulty(upcoming);
           return { team, fixtures: upcoming, average };
         })
-        .sort((a, b) => a.average - b.average),
+        .sort((a, b) => (a.average ?? 99) - (b.average ?? 99)),
     [fixtureRows, range],
   );
 
@@ -92,6 +94,18 @@ export default function FixturesPage() {
       />
 
       <div className="space-y-6">
+        <div className="flex flex-wrap gap-2 text-[11px] font-semibold text-muted">
+          <span className="rounded-full border border-fpl-border bg-fpl-raised px-2 py-1">
+            {fixtureMeta?.source ?? "Fixture source pending"}
+          </span>
+          <span className="rounded-full border border-fpl-border bg-fpl-raised px-2 py-1">
+            {fixtureMeta?.season ?? "Season pending"}
+          </span>
+          <span className="rounded-full border border-fpl-border bg-fpl-raised px-2 py-1 text-fpl-amber">
+            {fixtureMeta?.difficulty_source ?? "Difficulty source pending"}
+          </span>
+        </div>
+
         <Panel>
           <div className="mb-4">
             <h2 className="text-[18px] font-semibold text-primary">Your squad&apos;s upcoming fixtures</h2>
@@ -116,16 +130,20 @@ export default function FixturesPage() {
                     <div className="truncate text-sm font-semibold text-primary">{player.name}</div>
                     <div className="truncate text-xs text-muted">{player.team}</div>
                   </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <div className="flex gap-1.5">
+                <div className="flex flex-col items-end gap-1">
+                  <div className="flex gap-1.5">
                       {upcoming.map((fixture, index) => (
-                        <FdrChip key={`${player.name}-${fixture.gw}-${index}`} difficulty={fixture.difficulty} />
-                      ))}
-                    </div>
-                    <div className={`text-[11px] ${scoreClass(average)}`}>
-                      Avg difficulty: {average.toFixed(1)}
-                    </div>
+                        <FixtureChip
+                          key={`${player.name}-${fixture.gw}-${index}`}
+                          difficulty={fixture.difficulty}
+                          opponentShortName={fixture.opponent}
+                        />
+                    ))}
                   </div>
+                  <div className={`text-[11px] ${scoreClass(average)}`}>
+                    {average === null ? "No 2026-27 fixture row" : `Avg difficulty: ${average.toFixed(1)}`}
+                  </div>
+                </div>
                 </button>
               ))}
             </div>
@@ -171,16 +189,22 @@ export default function FixturesPage() {
                 key={team.team}
                 className="grid grid-cols-[minmax(120px,1fr)_auto_48px] items-center gap-3 rounded-[10px] border border-fpl-border/70 px-3 py-3"
               >
-                <div className={`truncate text-sm font-semibold ${average <= 2.5 ? "text-fpl-green" : "text-primary"}`}>
+                <div className={`truncate text-sm font-semibold ${
+                  average !== null && average <= 2.5 ? "text-fpl-green" : "text-primary"
+                }`}>
                   {team.team}
                 </div>
                 <div className="flex gap-1.5">
                   {upcoming.map((fixture, index) => (
-                    <FdrChip key={`${team.team}-${fixture.gw}-${index}`} difficulty={fixture.difficulty} />
+                    <FixtureChip
+                      key={`${team.team}-${fixture.gw}-${index}`}
+                      difficulty={fixture.difficulty}
+                      opponentShortName={fixture.opponent}
+                    />
                   ))}
                 </div>
                 <div className={`text-right font-mono text-sm font-semibold ${scoreClass(average)}`}>
-                  {average.toFixed(1)}
+                  {average === null ? "-" : average.toFixed(1)}
                 </div>
               </div>
             ))}
@@ -201,28 +225,14 @@ function findTeamFixtureRow(fixtureRows: FixtureTick[], player: SquadPlayer): Fi
   );
 }
 
-function averageDifficulty(fixtures: { difficulty: number }[]): number {
-  if (!fixtures.length) return 3;
+function averageDifficulty(fixtures: { difficulty: number }[]): number | null {
+  if (!fixtures.length) return null;
   return fixtures.reduce((sum, fixture) => sum + fixture.difficulty, 0) / fixtures.length;
 }
 
-function scoreClass(score: number): string {
+function scoreClass(score: number | null): string {
+  if (score === null) return "text-muted";
   if (score <= 2.5) return "text-fpl-green";
   if (score <= 3.5) return "text-fpl-amber";
   return "text-fpl-red";
-}
-
-function FdrChip({ difficulty }: { difficulty: number }) {
-  const color =
-    difficulty <= 2
-      ? "bg-fpl-green/15 text-fpl-green"
-      : difficulty === 3
-        ? "bg-fpl-amber/15 text-fpl-amber"
-        : "bg-fpl-red/15 text-fpl-red";
-
-  return (
-    <span className={`inline-flex h-[22px] w-[26px] items-center justify-center rounded-[5px] font-mono text-[11px] font-bold ${color}`}>
-      {difficulty}
-    </span>
-  );
 }

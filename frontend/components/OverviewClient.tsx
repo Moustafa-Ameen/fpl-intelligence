@@ -10,20 +10,31 @@ import { StartLikelihood } from "@/components/StartLikelihood";
 import { StatCard } from "@/components/StatCard";
 import { useDrawer } from "@/context/DrawerContext";
 import { getCurrentGameweek, getSquad } from "@/lib/api";
-import { fixtureTickerWithFallback, visibleFixtures } from "@/lib/fixtures";
-import { points, positionCode } from "@/lib/format";
+import { fixtureTickerRows, visibleFixtures } from "@/lib/fixtures";
+import { displayPlayerName, displayTeam, kitUrl, points, positionCode } from "@/lib/format";
+import { selectCurrentSquadMetrics } from "@/lib/squadMetrics";
 import type {
   AccuracyResult,
   CaptainPick,
   FixtureTick,
   Player,
+  SeasonState,
   SquadPlayer,
   TransferTarget,
 } from "@/lib/types";
 
 type ProjectionPlayer = Pick<
   CaptainPick,
-  "name" | "team" | "position" | "team_code" | "start_likelihood" | "predicted_pts" | "adjusted_pts" | "captain_score"
+  | "name"
+  | "element_id"
+  | "team"
+  | "position"
+  | "team_code"
+  | "web_name"
+  | "start_likelihood"
+  | "predicted_pts"
+  | "adjusted_pts"
+  | "captain_score"
 >;
 
 interface OverviewClientProps {
@@ -34,6 +45,7 @@ interface OverviewClientProps {
   fixtures: FixtureTick[];
   gems: TransferTarget[];
   accuracy: AccuracyResult[];
+  seasonState: SeasonState;
 }
 
 export function OverviewClient({
@@ -44,6 +56,7 @@ export function OverviewClient({
   fixtures,
   gems,
   accuracy,
+  seasonState,
 }: OverviewClientProps) {
   const { openDrawer } = useDrawer();
   const [squad, setSquad] = useState<SquadPlayer[]>([]);
@@ -60,13 +73,16 @@ export function OverviewClient({
       .catch(() => setSquad([]));
   }, []);
 
+  const squadMetrics = useMemo(() => selectCurrentSquadMetrics(squad), [squad]);
   const projectionPlayers = useMemo<ProjectionPlayer[]>(() => {
-    if (squad.length) {
-      return squad.slice(0, 11).map((player) => ({
+    if (squadMetrics.starters.length) {
+      return squadMetrics.starters.map((player) => ({
         name: player.name,
+        element_id: player.element_id,
         team: player.team,
         position: player.position,
         team_code: player.team_code,
+        web_name: player.web_name,
         start_likelihood: player.start_likelihood ?? 0,
         predicted_pts: player.predicted_pts ?? 0,
         adjusted_pts: player.predicted_pts ?? 0,
@@ -74,16 +90,19 @@ export function OverviewClient({
       }));
     }
     return predictions.slice(0, 11);
-  }, [predictions, squad]);
+  }, [predictions, squadMetrics.starters]);
 
-  const predictedGwPoints = useMemo(
-    () => projectionPlayers.reduce((sum, player) => sum + (player.adjusted_pts ?? player.predicted_pts ?? 0), 0),
-    [projectionPlayers],
-  );
+  const predictedGwPoints = squadMetrics.starters.length
+    ? squadMetrics.totalStartingXp
+    : projectionPlayers.reduce((sum, player) => sum + (player.adjusted_pts ?? player.predicted_pts ?? 0), 0);
+  const captainEdgeName = squadMetrics.captainPick?.web_name ?? squadMetrics.captainPick?.name ?? captains[0]?.name ?? "-";
+  const viceCaptainEdgeName = squadMetrics.viceCaptainPick?.web_name ?? squadMetrics.viceCaptainPick?.name ?? "VC";
+  const captaincyEdge = squadMetrics.captainPick ? squadMetrics.captaincyEdge : (captains[0]?.captain_score ?? captains[0]?.adjusted_pts ?? 0);
   const topCaptain = captains[0];
   const bestAccuracy = accuracy.find((row) => row.model === "FPL Intelligence (best)") ?? accuracy[0];
   const suggestions = buildSuggestions(squad, transfers, players);
-  const fixtureRows = fixtureTickerWithFallback(fixtures);
+  const fixtureRows = fixtureTickerRows(fixtures);
+  const fixtureMeta = fixtureRows[0];
 
   if (!players.length) return <EmptyState />;
 
@@ -108,7 +127,7 @@ export function OverviewClient({
               <div className="text-[10px] uppercase tracking-[0.14em] text-muted">Model status</div>
               <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-primary">
                 <span className="h-2 w-2 rounded-full bg-fpl-green shadow-[0_0_12px_rgba(0,255,135,0.75)]" />
-                Model active · GW38 data
+                Model active · FPL {seasonState.fpl_api_season}
               </div>
             </div>
           </div>
@@ -136,12 +155,12 @@ export function OverviewClient({
         <StatCard
           label="Predicted GW Points"
           value={points(predictedGwPoints)}
-          subLabel="Top 11 adjusted picks"
+          subLabel={connected ? "Your starting XI projection" : "Top 11 adjusted picks"}
         />
         <StatCard
-          label="Top Captain"
-          value={topCaptain?.name ?? "-"}
-          subLabel={`Adjusted score ${points(topCaptain?.captain_score ?? topCaptain?.adjusted_pts)}`}
+          label="Captaincy Edge"
+          value={`${points(captaincyEdge)} xP`}
+          subLabel={`${displayPlayerName(captainEdgeName)} over ${displayPlayerName(viceCaptainEdgeName)}`}
         />
         <StatCard
           label="Model MAE"
@@ -153,7 +172,12 @@ export function OverviewClient({
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.9fr)]">
         <div className="space-y-6">
-          <Panel title={connected ? "Your predicted XI" : "Top predicted XI · this gameweek"}>
+          <Panel title={connected ? "Your squad projection" : "Top projected XI · this gameweek"}>
+            <p className="mb-3 text-[13px] leading-5 text-secondary">
+              {connected
+                ? "This is your current FPL starting XI with this gameweek's model projection beside each player."
+                : "This is the highest projected XI from the full player pool for this gameweek."}
+            </p>
             <ProjectionPitch players={projectionPlayers} onSelect={openDrawer} />
           </Panel>
 
@@ -176,8 +200,8 @@ export function OverviewClient({
                       className="flex min-w-0 items-center gap-3 text-left"
                     >
                       <img
-                        src={kitUrl(outgoing?.team_code)}
-                        alt={`${outgoing?.team ?? "Outgoing"} kit`}
+                        src={kitUrl(outgoing?.team_code, outgoing?.team, outgoing?.name)}
+                        alt={`${displayTeam(outgoing?.team, outgoing?.name) || "Outgoing"} kit`}
                         className="h-12 w-12 shrink-0 object-contain"
                       />
                       <div className="min-w-0 flex-1">
@@ -190,7 +214,7 @@ export function OverviewClient({
                           </span>
                         </div>
                         <div className="mt-1 truncate text-xs text-muted">
-                          {outgoing?.team ?? "Unknown"} - low xP
+                          {displayTeam(outgoing?.team, outgoing?.name) || "Unknown"} - low xP
                         </div>
                       </div>
                     </button>
@@ -203,8 +227,8 @@ export function OverviewClient({
                       className="flex min-w-0 items-center gap-3 text-left"
                     >
                       <img
-                        src={kitUrl(incoming.team_code)}
-                        alt={`${incoming.team} kit`}
+                        src={kitUrl(incoming.team_code, incoming.team, incoming.name)}
+                        alt={`${displayTeam(incoming.team, incoming.name)} kit`}
                         className="h-12 w-12 shrink-0 object-contain"
                       />
                       <div className="min-w-0 flex-1">
@@ -215,7 +239,7 @@ export function OverviewClient({
                           <span className="truncate text-sm font-bold text-primary">{incoming.name}</span>
                         </div>
                         <div className="mt-1 truncate text-xs text-muted">
-                          {incoming.team} - {positionCode(incoming.position)} - {"\u00a3"}{points(incoming.price)}m
+                          {displayTeam(incoming.team, incoming.name)} - {positionCode(incoming.position)} - {"\u00a3"}{points(incoming.price)}m
                         </div>
                       </div>
                     </button>
@@ -230,46 +254,70 @@ export function OverviewClient({
         </div>
 
         <div className="space-y-6">
-          <Panel title="Captain Edge">
-            {topCaptain ? (
+          <Panel title="Captaincy Edge">
+            {squadMetrics.captainPick || topCaptain ? (
               <button
                 type="button"
-                onClick={() => openDrawer(topCaptain.name)}
+                onClick={() => openDrawer(squadMetrics.captainPick?.name ?? topCaptain.name)}
                 className="w-full rounded-lg border border-fpl-gold/25 bg-[linear-gradient(135deg,rgba(255,200,87,0.13),rgba(255,255,255,0.025))] p-4 text-left hover:border-fpl-gold/50"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.12em] text-fpl-gold">
                       <Crown className="h-4 w-4" />
-                      Captain Edge
+                      Captaincy Edge
                     </div>
-                    <div className="mt-3 truncate text-xl font-semibold text-primary">{topCaptain.name}</div>
-                    <div className="mt-1 text-sm text-secondary">{topCaptain.team}</div>
+                    <div className="mt-3 truncate text-xl font-semibold text-primary">
+                      {displayPlayerName(squadMetrics.captainPick?.name ?? topCaptain.name, squadMetrics.captainPick?.web_name)}
+                    </div>
+                    <div className="mt-1 text-sm text-secondary">
+                      {displayTeam(squadMetrics.captainPick?.team ?? topCaptain.team, squadMetrics.captainPick?.name ?? topCaptain.name)}
+                    </div>
                   </div>
                   <div className="text-right">
                     <div className="font-mono text-2xl font-bold text-fpl-gold">
-                      {points(topCaptain.captain_score ?? topCaptain.adjusted_pts)} xP
+                      +{points(captaincyEdge)} xP
+                    </div>
+                    <div className="mt-1 text-[11px] uppercase tracking-[0.1em] text-muted">
+                      over vice-captain
                     </div>
                     <div className="mt-2 flex justify-end">
-                      <StartLikelihood value={topCaptain.start_likelihood} />
+                      <StartLikelihood value={squadMetrics.captainPick?.start_likelihood ?? topCaptain.start_likelihood} />
                     </div>
                   </div>
                 </div>
                 <p className="mt-4 text-sm leading-6 text-secondary">
-                  {topCaptain.reasoning ?? "Best blend of projected points and start confidence."}
+                  {squadMetrics.captainPick && squadMetrics.viceCaptainPick
+                    ? `${displayPlayerName(squadMetrics.captainPick.name, squadMetrics.captainPick.web_name)} projects ${points(squadMetrics.captaincyEdge)} xP ahead of ${displayPlayerName(squadMetrics.viceCaptainPick.name, squadMetrics.viceCaptainPick.web_name)}.`
+                    : topCaptain.reasoning ?? "Best blend of projected points and start confidence."}
                 </p>
               </button>
             ) : null}
           </Panel>
 
           <Panel title="Fixture Ticker">
+            <div className="mb-3 flex flex-wrap gap-2 text-[11px] font-semibold text-muted">
+              <span className="rounded-full border border-fpl-border bg-fpl-raised px-2 py-1">
+                {fixtureMeta?.source ?? seasonState.fixture_source}
+              </span>
+              <span className="rounded-full border border-fpl-border bg-fpl-raised px-2 py-1">
+                {fixtureMeta?.season ?? seasonState.fixture_season}
+              </span>
+              <span className="rounded-full border border-fpl-border bg-fpl-raised px-2 py-1 text-fpl-amber">
+                {fixtureMeta?.difficulty_source ?? seasonState.difficulty_source}
+              </span>
+            </div>
             <div className="space-y-2">
               {fixtureRows.slice(0, 8).map((team) => (
                 <div key={team.team} className="grid grid-cols-[1fr_auto] items-center gap-4">
                   <div className="truncate text-sm text-primary">{team.team}</div>
                   <div className="flex gap-2">
                     {visibleFixtures(team).map((fixture, index) => (
-                      <FixtureChip key={`${team.team}-${fixture.gw}-${index}`} difficulty={fixture.difficulty} />
+                      <FixtureChip
+                        key={`${team.team}-${fixture.gw}-${index}`}
+                        difficulty={fixture.difficulty}
+                        opponentShortName={fixture.opponent}
+                      />
                     ))}
                   </div>
                 </div>
@@ -335,7 +383,7 @@ function buildSuggestions(
     }));
   }
 
-  const squadNames = new Set(squad.map((player) => player.name));
+  const squadKeys = new Set(squad.map(playerKey));
   const candidates = squad
     .filter((player) => !player.is_captain)
     .sort((a, b) => (a.predicted_pts ?? 0) - (b.predicted_pts ?? 0))
@@ -349,7 +397,7 @@ function buildSuggestions(
         const incomingProjected = player.adjusted_pts ?? player.predicted_pts ?? 0;
         const priceGap = typeof outgoingPrice === "number" ? Math.abs(player.price - outgoingPrice) : 0;
         return (
-          !squadNames.has(player.name) &&
+          !squadKeys.has(playerKey(player)) &&
           positionCode(player.position) === outgoingPosition &&
           incomingProjected > outgoingProjected &&
           priceGap <= 1
@@ -371,13 +419,13 @@ function buildSuggestions(
 function ProjectionPitch({ players, onSelect }: { players: ProjectionPlayer[]; onSelect: (name: string) => void }) {
   const rows = projectionRows(players);
   return (
-    <div className="relative overflow-hidden rounded-lg border border-fpl-border bg-[linear-gradient(180deg,#0b6a39_0%,#07502d_48%,#064325_100%)] p-4">
+    <div className="relative h-[clamp(360px,calc(100vh-420px),500px)] max-h-[500px] overflow-hidden rounded-lg border border-fpl-border bg-[linear-gradient(180deg,#0b6a39_0%,#07502d_48%,#064325_100%)] p-3">
       <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-white/12" />
       <div className="pointer-events-none absolute left-1/2 top-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/12" />
-      <div className="pointer-events-none absolute inset-4 rounded border border-white/10" />
-      <div className="relative grid min-h-[420px] content-between gap-5">
+      <div className="pointer-events-none absolute inset-3 rounded border border-white/10" />
+      <div className="relative grid h-full content-between gap-2">
         {rows.map((row, index) => (
-          <div key={index} className="flex flex-wrap justify-center gap-3 md:gap-4">
+          <div key={index} className="flex flex-wrap justify-center gap-x-3 gap-y-1 md:gap-x-4">
             {row.map((player) => (
               <ProjectionCard key={`${player.name}-${index}`} player={player} onSelect={onSelect} />
             ))}
@@ -397,11 +445,13 @@ function ProjectionCard({ player, onSelect }: { player: ProjectionPlayer; onSele
       aria-label={player.name}
     >
       <img
-        src={kitUrl(player.team_code)}
-        alt={`${player.team} kit`}
+        src={kitUrl(player.team_code, player.team, player.name)}
+        alt={`${displayTeam(player.team, player.name)} kit`}
         className="mx-auto h-[54px] w-[66px] object-contain"
       />
-      <div className="mt-1 truncate text-[12px] font-semibold text-white">{player.name.split(" ").at(-1)}</div>
+      <div className="mt-1 truncate text-[12px] font-semibold text-white">
+        {displayPlayerName(player.name, player.web_name)}
+      </div>
       <div className="font-mono text-xs font-bold text-fpl-green">
         {points(player.adjusted_pts ?? player.predicted_pts ?? player.captain_score)} xP
       </div>
@@ -429,6 +479,10 @@ function projectionRows(players: ProjectionPlayer[]) {
   return rows.length ? rows : [players];
 }
 
+function playerKey(player: Pick<Player, "element_id" | "name"> | Pick<SquadPlayer, "element_id" | "name"> | Pick<TransferTarget, "element_id" | "name">): string {
+  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
+}
+
 function ProofMetric({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {
   return (
     <div className="rounded-lg border border-fpl-border bg-fpl-raised p-3">
@@ -439,8 +493,4 @@ function ProofMetric({ icon, label, value }: { icon: ReactNode; label: string; v
       <div className="mt-3 font-mono text-lg font-bold text-primary">{value}</div>
     </div>
   );
-}
-
-function kitUrl(teamCode?: number | null): string {
-  return `https://fantasy.premierleague.com/dist/img/shirts/standard/shirt_${teamCode ?? 1}-66.png`;
 }

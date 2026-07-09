@@ -1,4 +1,5 @@
 export interface Player {
+  element_id?: number | null;
   name: string;
   team: string;
   position: string;
@@ -17,6 +18,7 @@ export interface Player {
 }
 
 export interface CaptainPick {
+  element_id?: number | null;
   name: string;
   team: string;
   position: string;
@@ -28,10 +30,12 @@ export interface CaptainPick {
   predicted_pts?: number | null;
   adjusted_pts?: number | null;
   team_code?: number;
+  web_name?: string;
   reasoning?: string;
 }
 
 export interface TransferTarget {
+  element_id?: number | null;
   name: string;
   team: string;
   position: string;
@@ -64,13 +68,20 @@ export interface Fixture {
   minutes?: number | null;
   team_h_difficulty: number;
   team_a_difficulty: number;
+  source?: string;
+  season?: string;
+  difficulty_source?: string;
 }
 
 export interface FixtureTick {
   team: string;
   team_short: string;
+  range?: number;
+  source?: string;
+  season?: string;
+  difficulty_source?: string;
   fixtures: {
-  gw: number;
+    gw: number;
     opponent: string;
     home: boolean;
     difficulty: number;
@@ -78,6 +89,7 @@ export interface FixtureTick {
 }
 
 export interface PlayerHistoryPoint {
+  element_id?: number | null;
   gw: number;
   price: number;
   total_points: number;
@@ -96,6 +108,7 @@ export interface TeamData {
 }
 
 export interface SquadPlayer {
+  element_id?: number | null;
   name: string;
   position: string;
   team: string;
@@ -107,6 +120,19 @@ export interface SquadPlayer {
   predicted_pts: number | null;
   start_likelihood: number | null;
   form: number | null;
+}
+
+export interface SeasonState {
+  fpl_api_season: string;
+  fixture_source: string;
+  fixture_season: string;
+  difficulty_source: string;
+  current_gw: number | null;
+  next_gw: number | null;
+  data_freshness: {
+    fpl_api: string;
+    fixtures: string;
+  };
 }
 
 export interface BacktestResult {

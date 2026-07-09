@@ -6,8 +6,8 @@ import {
   Crown,
   Edit2,
   Home,
-  Shield,
   Settings,
+  Shield,
   TrendingUp,
   Trophy,
   Users,
@@ -96,7 +96,7 @@ export function Sidebar({
         />
       ) : null}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[220px] flex-col border-r border-fpl-border bg-[#08100e]/95 shadow-[18px_0_48px_rgba(0,0,0,0.25)] backdrop-blur transition-transform md:translate-x-0 md:w-[72px] lg:w-[220px] ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-[244px] flex-col border-r border-white/10 bg-[#070b0a]/96 shadow-[18px_0_60px_rgba(0,0,0,0.45)] backdrop-blur transition-transform md:translate-x-0 md:w-[76px] lg:w-[244px] ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -107,22 +107,26 @@ export function Sidebar({
         >
           <X className="h-4 w-4" />
         </button>
-        <div className="px-5 pt-6 md:px-3 lg:px-5">
-          <div className="flex items-center gap-3 text-base font-bold text-primary">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-fpl-green/30 bg-fpl-green/10 text-fpl-green">
-              <Zap className="h-5 w-5" />
-            </span>
-            <span className="leading-tight md:hidden lg:inline">FPL Intelligence</span>
+        <div className="px-4 pt-5 md:px-3 lg:px-4">
+          <div className="rounded-xl border border-white/10 bg-[linear-gradient(145deg,rgba(255,255,255,0.08),rgba(0,255,135,0.04))] p-3 shadow-[0_18px_42px_rgba(0,0,0,0.28)]">
+            <div className="flex items-center gap-3">
+              <span className="flex h-[52px] w-[72px] shrink-0 items-center justify-center rounded-lg bg-white px-2 py-1 shadow-[0_0_24px_rgba(255,255,255,0.18)]">
+                <PLLogo size={62} height={34} />
+              </span>
+              <span className="leading-tight md:hidden lg:inline">
+                <span className="block text-[18px] font-black tracking-tight text-primary">FPL</span>
+                <span className="block text-[15px] font-black uppercase tracking-[0.04em] text-fpl-green">
+                  Intelligence
+                </span>
+              </span>
+            </div>
           </div>
           <div className="mt-3 inline-flex rounded-full border border-fpl-border bg-fpl-raised px-3 py-1 text-xs text-secondary md:hidden lg:inline-flex">
             {gameweek ? `GW ${gameweek}` : "GW —"}
           </div>
-          <div className="mx-auto mt-2 mb-5 flex justify-center md:hidden lg:flex">
-            <PLLogo size={44} />
-          </div>
         </div>
 
-        <nav className="mt-3 space-y-6">
+        <nav className="mt-5 space-y-6">
           {navGroups.map((group) => (
             <div key={group.label}>
               <div className="mb-2 px-5 text-[10px] font-bold uppercase tracking-[0.08em] text-muted md:hidden lg:block">
@@ -167,7 +171,11 @@ export function Sidebar({
               </div>
             )}
             <div className="mt-4 flex items-center gap-2 text-[11px] text-muted">
-              <span className={`h-2 w-2 rounded-full ${apiOk ? "bg-fpl-green shadow-[0_0_12px_rgba(0,255,135,0.7)]" : "bg-fpl-red"}`} />
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  apiOk ? "bg-fpl-green shadow-[0_0_12px_rgba(0,255,135,0.7)]" : "bg-fpl-red"
+                }`}
+              />
               Data from FPL Official API
             </div>
           </div>
