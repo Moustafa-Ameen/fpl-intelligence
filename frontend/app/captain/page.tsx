@@ -2,7 +2,7 @@
 
 import { ArrowRight, Crown, Info, Repeat2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { EmptyState, ErrorState, LoadingState } from "@/components/LoadingState";
+import { EmptyState, ErrorState, HeroSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
@@ -52,9 +52,9 @@ export default function CaptainPage() {
         .sort((a, b) => score(b) - score(a)),
     [picks, squad],
   );
-  const rankingRows = teamConnected && squadCaptainRows.length ? squadCaptainRows : picks;
+  const rankingRows = teamConnected && squadCaptainRows.length ? squadCaptainRows : picks.slice(0, 10);
 
-  if (loading) return <LoadingState />;
+  if (loading) return <HeroSkeleton />;
   if (error) return <ErrorState />;
   if (!picks.length) return <EmptyState />;
 
@@ -178,6 +178,12 @@ export default function CaptainPage() {
       </Panel>
 
       <Panel>
+        <div className="mb-4 rounded-lg border border-fpl-gold/25 bg-fpl-gold/[0.04] p-4 text-sm leading-6 text-secondary">
+          <span className="font-semibold text-fpl-gold">Captaincy model:</span> captain picks use
+          our Ridge Regression model rather than the lower-MAE Gradient Boosting model. Backtesting
+          showed Ridge is better at identifying explosive high-ceiling performances, which matters
+          more for captaincy than minimizing average prediction error.
+        </div>
         <button
           type="button"
           onClick={() => setShowMethod((value) => !value)}

@@ -2,7 +2,7 @@
 
 import { LayoutGrid, Search, Star, Table2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { EmptyState, ErrorState, LoadingState } from "@/components/LoadingState";
+import { EmptyState, ErrorState, TableSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
@@ -101,7 +101,7 @@ export default function StatsPage() {
     });
   }
 
-  if (loading) return <LoadingState />;
+  if (loading) return <TableSkeleton />;
   if (error) return <ErrorState />;
   if (!players.length) return <EmptyState />;
 

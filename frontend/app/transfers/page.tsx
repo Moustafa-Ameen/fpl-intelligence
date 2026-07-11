@@ -3,7 +3,7 @@
 import { ArrowRight, ChevronDown, TrendingDown, TrendingUp } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { EmptyState, ErrorState, LoadingState } from "@/components/LoadingState";
+import { EmptyState, ErrorState, TableSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
@@ -83,7 +83,7 @@ export default function TransfersPage() {
   const risers = useMemo(() => buildRisers(candidates), [candidates]);
   const fallers = useMemo(() => buildFallers(candidates, new Set(risers.map((player) => player.name))), [candidates, risers]);
 
-  if (loading) return <LoadingState />;
+  if (loading) return <TableSkeleton />;
   if (error) return <ErrorState />;
   if (!candidates.length) return <EmptyState />;
 

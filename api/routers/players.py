@@ -69,6 +69,7 @@ def _load_players() -> tuple[Any, list[str]]:
             )
     existing_numeric_columns = [column for column in NUMERIC_COLUMNS if column in dataframe.columns]
     dataframe[existing_numeric_columns] = dataframe[existing_numeric_columns].fillna(0)
+    dataframe = _add_historical_form_fallback(dataframe)
     return dataframe, available_columns
 
 
@@ -137,6 +138,32 @@ def _add_element_ids(dataframe):
         return None
 
     dataframe["element_id"] = dataframe.apply(lookup, axis=1)
+    return dataframe
+
+
+def _add_historical_form_fallback(dataframe: pd.DataFrame) -> pd.DataFrame:
+    if "form" not in dataframe.columns or dataframe["form"].max() > 0:
+        return dataframe
+
+    history = data_service.historical_player_gw()
+    if history.empty or "total_points" not in history.columns:
+        return dataframe
+
+    latest_season = history["season"].max()
+    season_history = history[history["season"] == latest_season].copy()
+    if season_history.empty:
+        return dataframe
+
+    latest_gameweek = season_history["gameweek"].max()
+    recent = season_history[season_history["gameweek"] >= latest_gameweek - 3].copy()
+    if recent.empty:
+        return dataframe
+
+    recent["player_key"] = recent["player_name"].map(_normalize)
+    recent_form = recent.groupby("player_key")["total_points"].mean()
+    dataframe["form"] = dataframe["player_name"].map(
+        lambda value: recent_form.get(_normalize(value), 0.0)
+    )
     return dataframe
 
 

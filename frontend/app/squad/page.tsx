@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { EmptyState, ErrorState, LoadingState } from "@/components/LoadingState";
+import { EmptyState, ErrorState, PitchSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
 import { PitchView } from "@/components/PitchView";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -60,7 +60,7 @@ export default function SquadPage() {
     );
   }
 
-  if (loading) return <LoadingState />;
+  if (loading) return <PitchSkeleton />;
   if (error) return <ErrorState />;
   if (!squad.length) return <EmptyState />;
 

@@ -8,6 +8,7 @@ from api import data_service
 router = APIRouter(prefix="/api/predictions", tags=["predictions"])
 
 BEST_MODEL = "Gradient Boosting Regressor"
+CAPTAINCY_MODEL = "Ridge Regression"
 PREDICTION_COLUMNS = {
     "player_id": "element_id",
     "player_name": "name",
@@ -19,25 +20,32 @@ PREDICTION_COLUMNS = {
 }
 
 
-def _best_model_predictions(gw: int | None = None) -> pd.DataFrame:
+def _model_predictions(model: str, gw: int | None = None) -> pd.DataFrame:
     dataframe = data_service.backtest_predictions()
     if dataframe.empty:
         return dataframe
 
-    dataframe = dataframe[dataframe["model"] == BEST_MODEL].copy()
+    dataframe = dataframe[dataframe["model"] == model].copy()
     if gw is None:
         gw = int(dataframe["gameweek"].max())
 
     return dataframe[dataframe["gameweek"] == gw].copy()
 
 
+def _best_model_predictions(gw: int | None = None) -> pd.DataFrame:
+    return _model_predictions(BEST_MODEL, gw)
+
+
 @router.get("/captaincy")
-def captaincy(gw: int | None = Query(default=None, ge=1, le=38)) -> list[dict[str, Any]]:
-    dataframe = _best_model_predictions(gw)
+def captaincy(
+    gw: int | None = Query(default=None, ge=1, le=38),
+    limit: int = Query(default=1000, ge=1, le=1000),
+) -> list[dict[str, Any]]:
+    dataframe = _model_predictions(CAPTAINCY_MODEL, gw)
     if dataframe.empty:
         return []
 
-    output = dataframe.sort_values("expected_points_adjusted", ascending=False).head(10)
+    output = dataframe.sort_values("expected_points_adjusted", ascending=False).head(limit)
     output = output.rename(columns=PREDICTION_COLUMNS)
     return data_service.to_records(output[list(PREDICTION_COLUMNS.values())])
 

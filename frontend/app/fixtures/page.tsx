@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { FixtureChip } from "@/components/FixtureChip";
-import { LoadingState, ErrorState } from "@/components/LoadingState";
+import { ErrorState, TableSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
 import { useDrawer } from "@/context/DrawerContext";
@@ -83,7 +83,7 @@ export default function FixturesPage() {
     [fixtureRows, range],
   );
 
-  if (loading) return <LoadingState />;
+  if (loading) return <TableSkeleton />;
   if (error) return <ErrorState />;
 
   return (

@@ -7,13 +7,14 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { EmptyState, ErrorState, LoadingState } from "@/components/LoadingState";
+import { EmptyState, ErrorState, TableSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
 import { getAccuracy, getCaptaincyBacktest, getTop10Metrics } from "@/lib/api";
@@ -43,7 +44,7 @@ export default function ProofPage() {
     [captaincy],
   );
 
-  if (loading) return <LoadingState />;
+  if (loading) return <TableSkeleton />;
   if (error) return <ErrorState />;
   if (!accuracy.length) return <EmptyState />;
 
@@ -134,7 +135,14 @@ export default function ProofPage() {
                   tickLine={false}
                 />
                 <Tooltip contentStyle={{ background: "#161616", border: "1px solid #2A2A2A", color: "#FFFFFF" }} />
-                <Bar dataKey="total_captain_points" radius={[0, 6, 6, 0]} label={{ position: "right", fill: "#FFFFFF", fontSize: 12 }}>
+                <Bar dataKey="total_captain_points" radius={[0, 6, 6, 0]}>
+                  <LabelList
+                    dataKey="total_captain_points"
+                    position="right"
+                    fill="#FFFFFF"
+                    fontSize={12}
+                    formatter={(value) => points(Number(value), 0)}
+                  />
                   {sortedCaptaincy.map((row) => (
                     <Cell key={row.strategy} fill={row.strategy === "FPL Intelligence" ? "#00FF87" : "#2A2A2A"} />
                   ))}
@@ -231,6 +239,7 @@ function MetricHeader({ label, title }: { label: string; title: string }) {
 function renameStrategy(row: BacktestResult): BacktestResult {
   const names: Record<string, string> = {
     "FPL Intelligence (best)": "FPL Intelligence",
+    "Ridge (Captaincy Model)": "Ridge (Captaincy Model)",
     "No model (form average)": "Form average (no ML)",
     "Most popular player": "Most popular captain choice",
     "Best points-per-game": "Highest PPG player",
@@ -242,4 +251,3 @@ function renameStrategy(row: BacktestResult): BacktestResult {
 function friendlyModel(model: string): string {
   return model === "FPL Intelligence (best)" ? "FPL Intelligence" : model;
 }
-

@@ -1,7 +1,10 @@
 import asyncio
 
+import pandas as pd
 from api.main import app
 from api.routers import fpl_live
+from api.routers import players as players_router
+from api.routers import predictions as predictions_router
 from api.routers.fixtures import _ticker_from_named_fixtures
 from httpx import ASGITransport, AsyncClient
 
@@ -45,6 +48,89 @@ def test_transfers_includes_rotation_risk_boolean():
     transfers = response.json()
     assert len(transfers) > 0
     assert isinstance(transfers[0]["rotation_risk"], bool)
+
+
+def test_players_form_falls_back_to_recent_history_when_snapshot_is_zero(monkeypatch):
+    ranked_players = pd.DataFrame(
+        [
+            {
+                "element_id": 1,
+                "player_name": "Example Forward",
+                "web_name": "Example",
+                "team_name": "Arsenal",
+                "team_code": 3,
+                "position": "Forward",
+                "price": 7.5,
+                "total_points": 100,
+                "points_per_game": 4.0,
+                "form": 0.0,
+                "minutes": 1000,
+                "selected_by_percent": 10.0,
+                "value_score": 13.3,
+                "minutes_security": 0.8,
+                "ownership_risk": 0.9,
+                "captain_score": 0.5,
+                "transfer_score": 0.4,
+            }
+        ]
+    )
+    history = pd.DataFrame(
+        [
+            {
+                "season": "2025-26",
+                "player_name": "Example Forward",
+                "gameweek": 35,
+                "total_points": 4,
+            },
+            {
+                "season": "2025-26",
+                "player_name": "Example Forward",
+                "gameweek": 36,
+                "total_points": 8,
+            },
+            {
+                "season": "2025-26",
+                "player_name": "Example Forward",
+                "gameweek": 37,
+                "total_points": 6,
+            },
+            {
+                "season": "2025-26",
+                "player_name": "Example Forward",
+                "gameweek": 38,
+                "total_points": 10,
+            },
+        ]
+    )
+
+    monkeypatch.setattr(players_router.data_service, "players", lambda: ranked_players.copy())
+    monkeypatch.setattr(players_router.data_service, "historical_player_gw", lambda: history.copy())
+
+    response = asyncio.run(_get("/api/players?sort_by=form&limit=1"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["form"] == 7.0
+
+
+def test_captaincy_predictions_use_ridge_regression_model():
+    predictions = predictions_router.data_service.backtest_predictions()
+    latest_gw = int(predictions["gameweek"].max())
+    ridge_top = (
+        predictions[
+            (predictions["gameweek"] == latest_gw)
+            & (predictions["model"] == predictions_router.CAPTAINCY_MODEL)
+        ]
+        .sort_values("expected_points_adjusted", ascending=False)
+        .iloc[0]
+    )
+
+    response = asyncio.run(_get(f"/api/predictions/captaincy?gw={latest_gw}&limit=1"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["name"] == ridge_top["player_name"]
+    assert predictions_router.CAPTAINCY_MODEL == "Ridge Regression"
 
 
 def test_fixture_ticker_rows_include_source_metadata():

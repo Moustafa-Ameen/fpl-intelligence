@@ -77,7 +77,7 @@ def _plain_strategy_name(strategy: str) -> str:
     if "random forest" in lowered:
         return "FPL Intelligence (alternative)"
     if "ridge" in lowered:
-        return "Simple model"
+        return "Ridge (Captaincy Model)"
     if "naive" in lowered:
         return "No model (form average)"
     if "most-owned" in lowered or "most owned" in lowered:
