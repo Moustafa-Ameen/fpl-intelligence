@@ -79,24 +79,28 @@ def test_players_form_falls_back_to_recent_history_when_snapshot_is_zero(monkeyp
             {
                 "season": "2025-26",
                 "player_name": "Example Forward",
+                "player_id": 1,
                 "gameweek": 35,
                 "total_points": 4,
             },
             {
                 "season": "2025-26",
                 "player_name": "Example Forward",
+                "player_id": 1,
                 "gameweek": 36,
                 "total_points": 8,
             },
             {
                 "season": "2025-26",
                 "player_name": "Example Forward",
+                "player_id": 1,
                 "gameweek": 37,
                 "total_points": 6,
             },
             {
                 "season": "2025-26",
                 "player_name": "Example Forward",
+                "player_id": 1,
                 "gameweek": 38,
                 "total_points": 10,
             },
@@ -110,7 +114,110 @@ def test_players_form_falls_back_to_recent_history_when_snapshot_is_zero(monkeyp
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload[0]["form"] == 7.0
+    assert payload[0]["form"] == 8.0
+
+
+def test_form_fallback_diverges_from_season_ppg_in_both_directions(monkeypatch):
+    ranked_players = pd.DataFrame(
+        [
+            {
+                "element_id": 1,
+                "player_name": "Out Of Form",
+                "web_name": "Out",
+                "team_name": "Arsenal",
+                "team_code": 3,
+                "position": "Forward",
+                "price": 8.0,
+                "total_points": 120,
+                "points_per_game": 8.0,
+                "form": 0.0,
+                "minutes": 1200,
+                "selected_by_percent": 10.0,
+                "value_score": 15.0,
+                "minutes_security": 0.9,
+                "ownership_risk": 0.9,
+                "captain_score": 0.8,
+                "transfer_score": 0.5,
+            },
+            {
+                "element_id": 2,
+                "player_name": "In Form",
+                "web_name": "In",
+                "team_name": "Chelsea",
+                "team_code": 8,
+                "position": "Midfielder",
+                "price": 6.0,
+                "total_points": 45,
+                "points_per_game": 3.0,
+                "form": 0.0,
+                "minutes": 900,
+                "selected_by_percent": 10.0,
+                "value_score": 7.5,
+                "minutes_security": 0.9,
+                "ownership_risk": 0.9,
+                "captain_score": 0.5,
+                "transfer_score": 0.6,
+            },
+        ]
+    )
+    history = pd.DataFrame(
+        [
+            {
+                "season": "2025-26",
+                "player_id": 1,
+                "player_name": "Out Of Form",
+                "gameweek": 36,
+                "total_points": 2,
+            },
+            {
+                "season": "2025-26",
+                "player_id": 1,
+                "player_name": "Out Of Form",
+                "gameweek": 37,
+                "total_points": 3,
+            },
+            {
+                "season": "2025-26",
+                "player_id": 1,
+                "player_name": "Out Of Form",
+                "gameweek": 38,
+                "total_points": 1,
+            },
+            {
+                "season": "2025-26",
+                "player_id": 2,
+                "player_name": "In Form",
+                "gameweek": 36,
+                "total_points": 7,
+            },
+            {
+                "season": "2025-26",
+                "player_id": 2,
+                "player_name": "In Form",
+                "gameweek": 37,
+                "total_points": 8,
+            },
+            {
+                "season": "2025-26",
+                "player_id": 2,
+                "player_name": "In Form",
+                "gameweek": 38,
+                "total_points": 6,
+            },
+        ]
+    )
+
+    monkeypatch.setattr(players_router.data_service, "players", lambda: ranked_players.copy())
+    monkeypatch.setattr(players_router.data_service, "historical_player_gw", lambda: history.copy())
+
+    response = asyncio.run(_get("/api/players?sort_by=name&limit=2"))
+
+    assert response.status_code == 200
+    by_name = {row["name"]: row for row in response.json()}
+    assert by_name["Out Of Form"]["form"] == 2.0
+    assert by_name["Out Of Form"]["form"] < by_name["Out Of Form"]["ppg"]
+    assert by_name["In Form"]["form"] == 7.0
+    assert by_name["In Form"]["form"] > by_name["In Form"]["ppg"]
 
 
 def test_captaincy_predictions_use_ridge_regression_model():

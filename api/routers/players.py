@@ -40,6 +40,8 @@ NUMERIC_COLUMNS = [
     "transfer_score",
 ]
 
+RECENT_FORM_WINDOW = 3
+
 
 def _load_players() -> tuple[Any, list[str]]:
     dataframe = data_service.players()
@@ -142,28 +144,64 @@ def _add_element_ids(dataframe):
 
 
 def _add_historical_form_fallback(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Fill an empty API form snapshot from the player's latest three GWs.
+
+    The FPL API's form field is sometimes empty early in a season or in a
+    stale local snapshot. It must remain a short-term metric, so this fallback
+    deliberately uses only the latest three rows for each player in the latest
+    season. Season totals are never used to derive form.
+    """
     if "form" not in dataframe.columns or dataframe["form"].max() > 0:
         return dataframe
 
     history = data_service.historical_player_gw()
-    if history.empty or "total_points" not in history.columns:
+    if history.empty or "total_points" not in history.columns or "season" not in history.columns:
         return dataframe
 
-    latest_season = history["season"].max()
+    latest_season = history["season"].dropna().max()
     season_history = history[history["season"] == latest_season].copy()
     if season_history.empty:
         return dataframe
 
-    latest_gameweek = season_history["gameweek"].max()
-    recent = season_history[season_history["gameweek"] >= latest_gameweek - 3].copy()
-    if recent.empty:
+    season_history["gameweek"] = pd.to_numeric(season_history["gameweek"], errors="coerce")
+    season_history["total_points"] = pd.to_numeric(
+        season_history["total_points"], errors="coerce"
+    )
+    season_history = season_history.dropna(subset=["gameweek", "total_points"])
+    if season_history.empty:
         return dataframe
 
-    recent["player_key"] = recent["player_name"].map(_normalize)
-    recent_form = recent.groupby("player_key")["total_points"].mean()
-    dataframe["form"] = dataframe["player_name"].map(
-        lambda value: recent_form.get(_normalize(value), 0.0)
-    )
+    # Tail per player rather than filtering from one global latest GW. This
+    # preserves a player's latest available history when a fixture is missed.
+    recent = season_history.sort_values("gameweek")
+    recent_by_id: dict[Any, float] = {}
+    if "player_id" in recent.columns:
+        recent_by_id = (
+            recent.dropna(subset=["player_id"])
+            .groupby("player_id", sort=False)
+            .tail(RECENT_FORM_WINDOW)
+            .groupby("player_id")["total_points"]
+            .mean()
+            .to_dict()
+        )
+
+    recent_by_name: dict[str, float] = {}
+    if "player_name" in recent.columns:
+        recent["player_key"] = recent["player_name"].map(_normalize)
+        recent_by_name = (
+            recent[recent["player_key"] != ""]
+            .groupby("player_key", sort=False)
+            .tail(RECENT_FORM_WINDOW)
+            .groupby("player_key")["total_points"]
+            .mean()
+            .to_dict()
+        )
+
+    current_ids = pd.to_numeric(dataframe["element_id"], errors="coerce")
+    form = current_ids.map(recent_by_id)
+    names = dataframe["player_name"].map(_normalize)
+    form = form.fillna(names.map(recent_by_name))
+    dataframe["form"] = form.fillna(0.0)
     return dataframe
 
 
