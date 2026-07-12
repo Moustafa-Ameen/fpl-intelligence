@@ -16,8 +16,11 @@ import type {
 
 export const API_BASE = "http://localhost:8000";
 
-async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { next: { revalidate: 300 } });
+async function fetchJson<T>(
+  path: string,
+  options: RequestInit & { next?: { revalidate: number } } = { next: { revalidate: 300 } },
+): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
     throw new Error(`API request failed: ${path}`);
   }
@@ -29,7 +32,7 @@ export async function getCurrentGameweek(): Promise<{ current_gw: number | null 
 }
 
 export async function getSeasonState(): Promise<SeasonState> {
-  return fetchJson("/api/fpl/season-state");
+  return fetchJson("/api/fpl/season-state", { cache: "no-store" });
 }
 
 export async function getPlayers(params?: {

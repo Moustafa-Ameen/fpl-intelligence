@@ -5,6 +5,7 @@ import { ArrowRight, CircleAlert, RotateCcw, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ErrorState, PlannerSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
+import { isSeasonEndedState, SeasonTransitionNotice } from "@/components/SeasonTransitionNotice";
 import { SectionHeader } from "@/components/SectionHeader";
 import { getPlanner } from "@/lib/api";
 import { points, positionCode } from "@/lib/format";
@@ -67,13 +68,13 @@ export default function PlannerPage() {
   }, [horizon]);
 
   const simulation = useMemo(
-    () => (data ? simulatePlan(data, stagedMoves) : []),
+    () => (data && !isSeasonEndedState(data.season_state) ? simulatePlan(data, stagedMoves) : []),
     [data, stagedMoves],
   );
   const selectedRow = simulation.find((row) => row.gameweek === selectedGameweek);
   const selectedOutgoing = selectedRow?.stateBefore.roster.get(Number(outgoingId));
   const candidates = useMemo(() => {
-    if (!selectedRow || !selectedOutgoing || !data) return [];
+    if (!selectedRow || !selectedOutgoing || !data || isSeasonEndedState(data.season_state)) return [];
     return data.player_pool
       .filter(
         (player) =>
@@ -106,6 +107,29 @@ export default function PlannerPage() {
   }
 
   if (error || !data) return <ErrorState />;
+
+  if (isSeasonEndedState(data.season_state)) {
+    return (
+      <div className="space-y-5">
+        <SectionHeader title="Transfer Planner" subtitle="Multi-gameweek planning is paused between seasons" />
+        <SeasonTransitionNotice
+          seasonState={{
+            season_state: data.season_state,
+            fpl_api_season: data.fpl_api_season ?? "the previous",
+            fixture_source: "",
+            fixture_season: data.fixture_season ?? "unknown",
+            difficulty_source: "",
+            current_gw: null,
+            next_gw: null,
+            last_completed_gw: null,
+            next_season_start: data.next_season_start ?? null,
+            data_freshness: { fpl_api: "", fixtures: "" },
+          }}
+          message={data.message}
+        />
+      </div>
+    );
+  }
 
   const selectedIncoming = data.player_pool.find((player) => player.element_id === Number(incomingId));
   const budgetLimit = selectedOutgoing

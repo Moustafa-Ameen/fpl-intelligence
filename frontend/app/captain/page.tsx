@@ -4,12 +4,13 @@ import { ArrowRight, Crown, Info, Repeat2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, ErrorState, HeroSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
+import { isSeasonEndedState, SeasonTransitionNotice } from "@/components/SeasonTransitionNotice";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
 import { useDrawer } from "@/context/DrawerContext";
-import { getCaptaincyPredictions, getCurrentGameweek, getSquad } from "@/lib/api";
+import { getCaptaincyPredictions, getCurrentGameweek, getSeasonState, getSquad } from "@/lib/api";
 import { kitUrl, points, positionCode } from "@/lib/format";
-import type { CaptainPick, SquadPlayer } from "@/lib/types";
+import type { CaptainPick, SeasonState, SquadPlayer } from "@/lib/types";
 
 export default function CaptainPage() {
   const { openDrawer } = useDrawer();
@@ -19,20 +20,28 @@ export default function CaptainPage() {
   const [showMethod, setShowMethod] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [seasonState, setSeasonState] = useState<SeasonState | null>(null);
 
   useEffect(() => {
     const teamId = window.localStorage.getItem("fpl_team_id");
     queueMicrotask(() => setTeamConnected(Boolean(teamId)));
 
-    Promise.all([
-      getCaptaincyPredictions(),
-      teamId
-        ? getCurrentGameweek()
-            .then((gw) => getSquad(teamId, gw.current_gw ?? 1))
-            .catch(() => [])
-        : Promise.resolve([]),
-    ])
-      .then(([predictionRows, squadRows]) => {
+    getSeasonState()
+      .then((state) => {
+        setSeasonState(state);
+        if (isSeasonEndedState(state.season_state)) return null;
+        return Promise.all([
+          getCaptaincyPredictions(),
+          teamId
+            ? getCurrentGameweek()
+                .then((gw) => getSquad(teamId, gw.current_gw ?? 1))
+                .catch(() => [])
+            : Promise.resolve([]),
+        ]);
+      })
+      .then((result) => {
+        if (!result) return;
+        const [predictionRows, squadRows] = result;
         setPicks(predictionRows);
         setSquad(squadRows);
       })
@@ -56,6 +65,14 @@ export default function CaptainPage() {
 
   if (loading) return <HeroSkeleton />;
   if (error) return <ErrorState />;
+  if (seasonState && isSeasonEndedState(seasonState.season_state)) {
+    return (
+      <div className="space-y-5">
+        <SectionHeader title="Who should I captain?" subtitle="Captaincy projections are paused between seasons" />
+        <SeasonTransitionNotice seasonState={seasonState} />
+      </div>
+    );
+  }
   if (!picks.length) return <EmptyState />;
 
   const globalTop = picks[0];

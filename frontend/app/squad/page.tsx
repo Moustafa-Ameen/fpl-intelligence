@@ -5,10 +5,11 @@ import { EmptyState, ErrorState, PitchSkeleton } from "@/components/LoadingState
 import { Panel } from "@/components/Panel";
 import { PitchView } from "@/components/PitchView";
 import { SectionHeader } from "@/components/SectionHeader";
-import { getCurrentGameweek, getSquad, getTeam } from "@/lib/api";
+import { isSeasonEndedState, SeasonTransitionNotice } from "@/components/SeasonTransitionNotice";
+import { getCurrentGameweek, getSeasonState, getSquad, getTeam } from "@/lib/api";
 import { points, positionCode, price } from "@/lib/format";
 import { selectCurrentSquadMetrics } from "@/lib/squadMetrics";
-import type { SquadPlayer, TeamData } from "@/lib/types";
+import type { SeasonState, SquadPlayer, TeamData } from "@/lib/types";
 
 export default function SquadPage() {
   const [teamId, setTeamId] = useState("");
@@ -17,6 +18,7 @@ export default function SquadPage() {
   const [showBench, setShowBench] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [seasonState, setSeasonState] = useState<SeasonState | null>(null);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -26,9 +28,17 @@ export default function SquadPage() {
       if (!savedTeamId) return;
 
       setLoading(true);
-      getCurrentGameweek()
-        .then((gw) => Promise.all([getSquad(savedTeamId, gw.current_gw ?? 1), getTeam(savedTeamId)]))
-        .then(([squadRows, teamData]) => {
+      getSeasonState()
+        .then((state) => {
+          setSeasonState(state);
+          if (isSeasonEndedState(state.season_state)) return null;
+          return getCurrentGameweek().then((gw) =>
+            Promise.all([getSquad(savedTeamId, gw.current_gw ?? 1), getTeam(savedTeamId)]),
+          );
+        })
+        .then((result) => {
+          if (!result) return;
+          const [squadRows, teamData] = result;
           setSquad(squadRows);
           setTeam(teamData);
         })
@@ -62,6 +72,14 @@ export default function SquadPage() {
 
   if (loading) return <PitchSkeleton />;
   if (error) return <ErrorState />;
+  if (seasonState && isSeasonEndedState(seasonState.season_state)) {
+    return (
+      <div className="space-y-5">
+        <SectionHeader title="My Squad" subtitle={`Team #${teamId}`} />
+        <SeasonTransitionNotice seasonState={seasonState} />
+      </div>
+    );
+  }
   if (!squad.length) return <EmptyState />;
 
   return (

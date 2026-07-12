@@ -82,8 +82,8 @@ FPL_DIFFICULTY_SOURCE = "Official FPL FDR"
 ESTIMATED_DIFFICULTY_SOURCE = "App-estimated difficulty"
 
 
-async def fixture_source_state() -> dict[str, str]:
-    fixture_rows = await fpl_client.get_fixtures()
+async def fixture_source_state(fixture_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    fixture_rows = fixture_rows if fixture_rows is not None else await fpl_client.get_fixtures()
     upcoming = [fixture for fixture in fixture_rows if not fixture.get("finished", False)]
     if upcoming:
         return {
@@ -91,6 +91,18 @@ async def fixture_source_state() -> dict[str, str]:
             "season": _season_from_fpl_fixtures(upcoming),
             "difficulty_source": FPL_DIFFICULTY_SOURCE,
             "freshness": "live",
+            "next_kickoff": _first_kickoff(upcoming),
+        }
+
+    try:
+        released = await _premier_league_2026_27_fixtures()
+    except httpx.HTTPError:
+        return {
+            "source": "Fixture data unavailable",
+            "season": "unknown",
+            "difficulty_source": "unknown",
+            "freshness": "unavailable",
+            "next_kickoff": None,
         }
 
     return {
@@ -98,6 +110,7 @@ async def fixture_source_state() -> dict[str, str]:
         "season": "2026-27",
         "difficulty_source": ESTIMATED_DIFFICULTY_SOURCE,
         "freshness": "static official release",
+        "next_kickoff": _first_kickoff(released),
     }
 
 
@@ -217,6 +230,11 @@ def _season_from_fpl_fixtures(fixtures: list[dict[str, Any]]) -> str:
 
     year = int(str(min(kickoff_values))[:4])
     return f"{year}-{str(year + 1)[-2:]}"
+
+
+def _first_kickoff(fixtures: list[dict[str, Any]]) -> str | None:
+    kickoffs = [fixture.get("kickoff_time") for fixture in fixtures if fixture.get("kickoff_time")]
+    return min(kickoffs) if kickoffs else None
 
 
 async def _premier_league_2026_27_fixtures() -> list[dict[str, Any]]:

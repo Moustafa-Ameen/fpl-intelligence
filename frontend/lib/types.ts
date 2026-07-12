@@ -123,17 +123,25 @@ export interface SquadPlayer {
 }
 
 export interface SeasonState {
+  season_state: SeasonStateCode;
   fpl_api_season: string;
   fixture_source: string;
   fixture_season: string;
   difficulty_source: string;
   current_gw: number | null;
   next_gw: number | null;
+  last_completed_gw: number | null;
+  next_season_start: string | null;
   data_freshness: {
     fpl_api: string;
     fixtures: string;
   };
 }
+
+export type SeasonStateCode =
+  | "in_season"
+  | "season_ended_preseason"
+  | "season_ended_no_next_data";
 
 export interface PlannerFixtureProjection {
   opponent: string;
@@ -178,6 +186,11 @@ export interface PlannerBaselinePoint {
 
 export interface PlannerResponse {
   team_id: number;
+  season_state: SeasonStateCode;
+  fpl_api_season?: string;
+  fixture_season?: string;
+  next_season_start?: string | null;
+  message?: string;
   start_gameweek: number;
   horizon: number;
   squad_gameweek: number;

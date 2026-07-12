@@ -5,13 +5,14 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, ErrorState, TableSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
+import { isSeasonEndedState, SeasonTransitionNotice } from "@/components/SeasonTransitionNotice";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
 import { useDrawer } from "@/context/DrawerContext";
-import { getCurrentGameweek, getPlayers, getSquad, getTeam } from "@/lib/api";
+import { getCurrentGameweek, getPlayers, getSeasonState, getSquad, getTeam } from "@/lib/api";
 import { displayPlayerName, displayTeam, kitUrl, points, positionCode, price } from "@/lib/format";
 import { playerXp, selectCurrentSquadMetrics } from "@/lib/squadMetrics";
-import type { Player, SquadPlayer, TeamData } from "@/lib/types";
+import type { Player, SeasonState, SquadPlayer, TeamData } from "@/lib/types";
 
 type Tab = "best" | "prices";
 type PositionFilter = "All" | "GK" | "DEF" | "MID" | "FWD";
@@ -30,21 +31,29 @@ export default function TransfersPage() {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [seasonState, setSeasonState] = useState<SeasonState | null>(null);
 
   useEffect(() => {
     const teamId = window.localStorage.getItem("fpl_team_id");
     queueMicrotask(() => setTeamConnected(Boolean(teamId)));
 
-    Promise.all([
-      getPlayers({ limit: 1000, sort_by: "transfer_score" }),
-      teamId
-        ? getCurrentGameweek()
-            .then((gw) => getSquad(teamId, gw.current_gw ?? 1))
-            .catch(() => [])
-        : Promise.resolve([]),
-      teamId ? getTeam(teamId).catch(() => null) : Promise.resolve(null),
-    ])
-      .then(([playerRows, squadRows, teamData]) => {
+    getSeasonState()
+      .then((state) => {
+        setSeasonState(state);
+        if (isSeasonEndedState(state.season_state)) return null;
+        return Promise.all([
+          getPlayers({ limit: 1000, sort_by: "transfer_score" }),
+          teamId
+            ? getCurrentGameweek()
+                .then((gw) => getSquad(teamId, gw.current_gw ?? 1))
+                .catch(() => [])
+            : Promise.resolve([]),
+          teamId ? getTeam(teamId).catch(() => null) : Promise.resolve(null),
+        ]);
+      })
+      .then((result) => {
+        if (!result) return;
+        const [playerRows, squadRows, teamData] = result;
         setCandidates(playerRows);
         setSquad(squadRows);
         setTeam(teamData);
@@ -85,6 +94,14 @@ export default function TransfersPage() {
 
   if (loading) return <TableSkeleton />;
   if (error) return <ErrorState />;
+  if (seasonState && isSeasonEndedState(seasonState.season_state)) {
+    return (
+      <div className="space-y-5">
+        <SectionHeader title="Who should I bring in?" subtitle="Transfer recommendations are paused between seasons" />
+        <SeasonTransitionNotice seasonState={seasonState} />
+      </div>
+    );
+  }
   if (!candidates.length) return <EmptyState />;
 
   return (

@@ -20,7 +20,7 @@ def _current_gameweek_from_bootstrap(bootstrap: dict[str, Any]) -> int | None:
         return upcoming.get("id")
 
     finished = [event.get("id") for event in events if event.get("finished") and event.get("id")]
-    return max(finished, default=0) + 1 if finished else None
+    return max(finished, default=0) or None
 
 
 def _next_gameweek_from_bootstrap(bootstrap: dict[str, Any]) -> int | None:
@@ -31,10 +31,10 @@ def _next_gameweek_from_bootstrap(bootstrap: dict[str, Any]) -> int | None:
 
     current = next((event for event in events if event.get("is_current")), None)
     if current and current.get("id"):
-        return min(int(current["id"]) + 1, 38)
+        current_id = int(current["id"])
+        return current_id + 1 if current_id < 38 else None
 
-    current_gameweek = _current_gameweek_from_bootstrap(bootstrap)
-    return min(current_gameweek + 1, 38) if current_gameweek else None
+    return None
 
 
 def _season_label_from_bootstrap(bootstrap: dict[str, Any]) -> str:
@@ -50,6 +50,29 @@ def _season_label_from_bootstrap(bootstrap: dict[str, Any]) -> str:
     return f"{year}-{str(year + 1)[-2:]}"
 
 
+def _detect_season_state(
+    bootstrap: dict[str, Any], fixture_state: dict[str, Any]
+) -> str:
+    events = bootstrap.get("events", [])
+    has_current = any(event.get("is_current") and not event.get("finished") for event in events)
+    if has_current:
+        return "in_season"
+
+    last_event = max(
+        (event for event in events if event.get("id")),
+        key=lambda event: int(event["id"]),
+        default=None,
+    )
+    if not last_event or not last_event.get("finished"):
+        return "in_season"
+
+    has_next_season_data = bool(
+        fixture_state.get("next_kickoff")
+        or fixture_state.get("season") not in {None, "", "unknown"}
+    )
+    return "season_ended_preseason" if has_next_season_data else "season_ended_no_next_data"
+
+
 @router.get("/current-gw")
 async def current_gameweek() -> dict[str, int | None]:
     bootstrap = await fpl_client.get_bootstrap()
@@ -60,13 +83,20 @@ async def current_gameweek() -> dict[str, int | None]:
 async def season_state() -> dict[str, Any]:
     bootstrap = await fpl_client.get_bootstrap()
     fixture_state = await fixture_source_state()
+    fpl_api_season = _season_label_from_bootstrap(bootstrap)
     return {
-        "fpl_api_season": _season_label_from_bootstrap(bootstrap),
+        "fpl_api_season": fpl_api_season,
         "fixture_source": fixture_state["source"],
         "fixture_season": fixture_state["season"],
         "difficulty_source": fixture_state["difficulty_source"],
         "current_gw": _current_gameweek_from_bootstrap(bootstrap),
         "next_gw": _next_gameweek_from_bootstrap(bootstrap),
+        "season_state": _detect_season_state(bootstrap, fixture_state),
+        "last_completed_gw": max(
+            (int(event["id"]) for event in bootstrap.get("events", []) if event.get("finished")),
+            default=None,
+        ),
+        "next_season_start": fixture_state.get("next_kickoff"),
         "data_freshness": {
             "fpl_api": "live",
             "fixtures": fixture_state["freshness"],

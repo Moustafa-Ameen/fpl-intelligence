@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { ArrowRight, Crown, ShieldCheck, Sparkles, Target, TrendingUp } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { FixtureChip } from "@/components/FixtureChip";
 import { EmptyState } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
+import { isSeasonEndedState, SeasonTransitionNotice } from "@/components/SeasonTransitionNotice";
 import { StartLikelihood } from "@/components/StartLikelihood";
 import { StatCard } from "@/components/StatCard";
 import { useDrawer } from "@/context/DrawerContext";
@@ -105,6 +107,17 @@ export function OverviewClient({
   const fixtureMeta = fixtureRows[0];
 
   if (!players.length) return <EmptyState />;
+  if (isSeasonEndedState(seasonState.season_state)) {
+    return (
+      <div className="space-y-5">
+        <SeasonTransitionNotice seasonState={seasonState} />
+        <div className="rounded-lg border border-fpl-border bg-fpl-card p-5 text-sm text-secondary">
+          The decision dashboard will return when the new season has live gameweek data. Historical model results remain available on{" "}
+          <Link href="/proof" className="font-semibold text-fpl-green hover:text-primary">Proof It Works</Link>.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

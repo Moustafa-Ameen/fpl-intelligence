@@ -4,7 +4,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from api import data_service, fpl_client
-from api.routers.fpl_live import _current_gameweek_from_bootstrap, _next_gameweek_from_bootstrap
+from api.routers.fixtures import fixture_source_state
+from api.routers.fpl_live import (
+    _current_gameweek_from_bootstrap,
+    _detect_season_state,
+    _next_gameweek_from_bootstrap,
+    _season_label_from_bootstrap,
+)
 from fpl_intelligence.multi_gw_projection import (
     ALLOWED_HORIZONS,
     MODEL_NAME,
@@ -29,13 +35,28 @@ async def planner(
         raise HTTPException(status_code=400, detail="horizon must be one of 3, 5, or 8")
 
     bootstrap = await fpl_client.get_bootstrap()
+    fixture_rows = await fpl_client.get_fixtures()
+    fixture_state = await fixture_source_state(fixture_rows)
+    season_state = _detect_season_state(bootstrap, fixture_state)
+    if season_state != "in_season":
+        return {
+            "team_id": team_id,
+            "season_state": season_state,
+            "fpl_api_season": _season_label_from_bootstrap(bootstrap),
+            "fixture_season": fixture_state.get("season", "unknown"),
+            "next_season_start": fixture_state.get("next_kickoff"),
+            "message": _season_transition_message(
+                _season_label_from_bootstrap(bootstrap),
+                fixture_state.get("next_kickoff"),
+            ),
+        }
+
     current_gameweek = _current_gameweek_from_bootstrap(bootstrap) or 1
     start_gameweek = _next_gameweek_from_bootstrap(bootstrap) or min(current_gameweek + 1, 38)
     squad_gameweek = max(1, start_gameweek - 1)
-    team_entry, picks_payload, fixtures = await asyncio.gather(
+    team_entry, picks_payload = await asyncio.gather(
         fpl_client.get_team(team_id),
         fpl_client.get_team_picks(team_id, squad_gameweek),
-        fpl_client.get_fixtures(),
     )
     history = data_service.historical_player_gw()
 
@@ -53,7 +74,7 @@ async def planner(
 
     projected_players = project_players(
         player_rows,
-        fixtures,
+        fixture_rows,
         bootstrap.get("teams", []),
         start_gameweek,
         horizon,
@@ -91,6 +112,9 @@ async def planner(
 
     return {
         "team_id": team_id,
+        "season_state": season_state,
+        "fpl_api_season": _season_label_from_bootstrap(bootstrap),
+        "fixture_season": fixture_state.get("season", "unknown"),
         "start_gameweek": start_gameweek,
         "horizon": horizon,
         "squad_gameweek": squad_gameweek,
@@ -106,6 +130,20 @@ async def planner(
         "squad": squad,
         "player_pool": player_pool,
     }
+
+
+def _season_transition_message(season: str, next_season_start: str | None) -> str:
+    if next_season_start:
+        start_date = next_season_start[:10]
+        return (
+            f"The {season} season has ended. Gameweek projections for the next season "
+            f"will be available once the new season begins and enough gameweeks have "
+            f"been played to establish rolling form data. Season starts {start_date}."
+        )
+    return (
+        f"The {season} season has ended. Gameweek projections for the next season will be "
+        "available once official fixtures and enough rolling form data exist."
+    )
 
 
 def _current_player_rows(bootstrap: dict[str, Any]) -> list[dict[str, Any]]:

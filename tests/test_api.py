@@ -6,7 +6,7 @@ from api.routers import fpl_live
 from api.routers import planner as planner_router
 from api.routers import players as players_router
 from api.routers import predictions as predictions_router
-from api.routers.fixtures import _ticker_from_named_fixtures
+from api.routers.fixtures import TEAM_SHORT_NAMES, TEAM_STRENGTH, _ticker_from_named_fixtures
 from httpx import ASGITransport, AsyncClient
 
 
@@ -263,6 +263,16 @@ def test_fixture_ticker_rows_include_source_metadata():
     assert arsenal["fixtures"][0]["opponent"] == "CHE"
 
 
+def test_2026_27_team_maps_cover_current_membership():
+    expected_shorts = {
+        "ARS", "AVL", "BOU", "BRE", "BHA", "CHE", "COV", "CRY", "EVE", "FUL",
+        "HUL", "IPS", "LEE", "LIV", "MCI", "MUN", "NEW", "NFO", "SUN", "TOT",
+    }
+
+    assert set(TEAM_SHORT_NAMES.values()) == expected_shorts
+    assert set(TEAM_STRENGTH) == expected_shorts
+
+
 def test_season_state_returns_central_source_metadata(monkeypatch):
     async def fake_bootstrap():
         return {
@@ -293,6 +303,46 @@ def test_season_state_returns_central_source_metadata(monkeypatch):
     assert payload["difficulty_source"] == "App-estimated difficulty"
     assert payload["current_gw"] == 1
     assert payload["next_gw"] == 2
+    assert payload["season_state"] == "in_season"
+
+
+def test_season_state_detection_covers_transition_cases():
+    mid_season = {
+        "events": [
+            {"id": 1, "finished": True},
+            {"id": 2, "is_current": True, "finished": False},
+            {"id": 3, "is_next": True, "finished": False},
+        ]
+    }
+    ended_with_fixtures = {
+        "events": [{"id": 38, "finished": True, "is_current": True}],
+    }
+    ended_without_fixtures = {
+        "events": [{"id": 38, "finished": True}],
+    }
+
+    assert fpl_live._detect_season_state(mid_season, {"season": "2025-26"}) == "in_season"
+    assert (
+        fpl_live._detect_season_state(
+            ended_with_fixtures,
+            {"season": "2026-27", "next_kickoff": "2026-08-21T19:00:00Z"},
+        )
+        == "season_ended_preseason"
+    )
+    assert (
+        fpl_live._detect_season_state(
+            ended_without_fixtures,
+            {"season": "unknown", "next_kickoff": None},
+        )
+        == "season_ended_no_next_data"
+    )
+
+
+def test_finished_season_has_no_next_gameweek():
+    bootstrap = {"events": [{"id": 38, "finished": True}]}
+
+    assert fpl_live._current_gameweek_from_bootstrap(bootstrap) == 38
+    assert fpl_live._next_gameweek_from_bootstrap(bootstrap) is None
 
 
 def test_planner_requires_connected_team():
@@ -342,6 +392,15 @@ def test_planner_returns_squad_and_baseline(monkeypatch):
     async def fake_fixtures():
         return []
 
+    async def fake_fixture_source_state(fixture_rows=None):
+        return {
+            "source": "FPL Fantasy API",
+            "season": "2025-26",
+            "difficulty_source": "Official FPL FDR",
+            "freshness": "live",
+            "next_kickoff": None,
+        }
+
     projected = [
         {
             "element_id": 10,
@@ -368,6 +427,7 @@ def test_planner_returns_squad_and_baseline(monkeypatch):
     monkeypatch.setattr(planner_router.fpl_client, "get_team", fake_team)
     monkeypatch.setattr(planner_router.fpl_client, "get_team_picks", fake_picks)
     monkeypatch.setattr(planner_router.fpl_client, "get_fixtures", fake_fixtures)
+    monkeypatch.setattr(planner_router, "fixture_source_state", fake_fixture_source_state)
     monkeypatch.setattr(
         planner_router.data_service,
         "players",
@@ -387,6 +447,38 @@ def test_planner_returns_squad_and_baseline(monkeypatch):
     assert payload["max_extra_free_transfers"] == 4
     assert payload["squad"][0]["is_starter"] is True
     assert payload["baseline"][0]["projected_points"] == 4.2
+
+
+def test_planner_returns_transition_state_without_projecting(monkeypatch):
+    async def fake_bootstrap():
+        return {
+            "events": [{"id": 38, "finished": True, "deadline_time": "2025-08-15T17:30:00Z"}],
+        }
+
+    async def fake_fixtures():
+        return []
+
+    async def fake_fixture_source_state(fixture_rows=None):
+        return {
+            "source": "Official PL fixture release",
+            "season": "2026-27",
+            "difficulty_source": "App-estimated difficulty",
+            "freshness": "static official release",
+            "next_kickoff": "2026-08-21T19:00:00Z",
+        }
+
+    monkeypatch.setattr(planner_router.fpl_client, "get_bootstrap", fake_bootstrap)
+    monkeypatch.setattr(planner_router.fpl_client, "get_fixtures", fake_fixtures)
+    monkeypatch.setattr(planner_router, "fixture_source_state", fake_fixture_source_state)
+
+    response = asyncio.run(_get("/api/predictions/planner?team_id=10&horizon=3"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["season_state"] == "season_ended_preseason"
+    assert payload["fixture_season"] == "2026-27"
+    assert payload["next_season_start"] == "2026-08-21T19:00:00Z"
+    assert "baseline" not in payload
 
 
 def test_backtest_accuracy_uses_plain_english_model_names():
