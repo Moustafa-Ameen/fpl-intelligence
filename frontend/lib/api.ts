@@ -6,6 +6,7 @@ import type {
   FixtureTick,
   Player,
   PlayerHistoryPoint,
+  PlannerResponse,
   SeasonState,
   SquadPlayer,
   TeamData,
@@ -96,6 +97,10 @@ export async function getTeamHistory(teamId: string): Promise<unknown> {
 
 export async function getTeamTransfers(teamId: string): Promise<unknown[]> {
   return fetchJson(`/api/fpl/team/${teamId}/transfers`);
+}
+
+export async function getPlanner(teamId: string, horizon: number): Promise<PlannerResponse> {
+  return fetchJson(`/api/predictions/planner?team_id=${encodeURIComponent(teamId)}&horizon=${horizon}`);
 }
 
 export async function getAccuracy(): Promise<AccuracyResult[]> {

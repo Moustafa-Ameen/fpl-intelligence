@@ -135,6 +135,62 @@ export interface SeasonState {
   };
 }
 
+export interface PlannerFixtureProjection {
+  opponent: string;
+  opponent_name: string;
+  home: boolean;
+  opponent_strength: number;
+  predicted_points: number;
+  start_likelihood: number;
+  projected_points: number;
+}
+
+export interface PlannerProjection {
+  gameweek: number;
+  projected_points: number;
+  blank: boolean;
+  double: boolean;
+  fixtures: PlannerFixtureProjection[];
+}
+
+export interface PlannerPlayer {
+  element_id: number;
+  name: string;
+  web_name?: string;
+  team: string;
+  team_code?: number;
+  position: string;
+  price: number;
+  start_likelihood: number;
+  projections: PlannerProjection[];
+  pick_order?: number;
+  is_starter?: boolean;
+  is_captain?: boolean;
+  is_vice_captain?: boolean;
+}
+
+export interface PlannerBaselinePoint {
+  gameweek: number;
+  projected_points: number;
+  blank_count: number;
+  double_count: number;
+}
+
+export interface PlannerResponse {
+  team_id: number;
+  start_gameweek: number;
+  horizon: number;
+  squad_gameweek: number;
+  model: string;
+  assumption: string;
+  bank_value: number | null;
+  free_transfers_available: number;
+  max_extra_free_transfers: number;
+  baseline: PlannerBaselinePoint[];
+  squad: PlannerPlayer[];
+  player_pool: PlannerPlayer[];
+}
+
 export interface BacktestResult {
   strategy: string;
   total_captain_points: number;

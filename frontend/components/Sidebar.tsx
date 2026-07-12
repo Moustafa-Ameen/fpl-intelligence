@@ -3,6 +3,7 @@
 import {
   BarChart3,
   CalendarDays,
+  CalendarRange,
   Crown,
   Edit2,
   Home,
@@ -32,6 +33,7 @@ const navGroups = [
     items: [
       { href: "/captain", label: "Who to Captain", icon: Crown },
       { href: "/transfers", label: "Who to Sign", icon: TrendingUp },
+      { href: "/planner", label: "Transfer Planner", icon: CalendarRange },
       { href: "/fixtures", label: "Fixtures", icon: CalendarDays },
       { href: "/chips", label: "Chip Guide", icon: Zap },
     ],

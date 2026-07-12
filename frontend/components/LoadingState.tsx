@@ -103,6 +103,38 @@ export function HeroSkeleton() {
   );
 }
 
+export function PlannerSkeleton() {
+  return (
+    <div className="space-y-4">
+      <div className="skeleton h-16 rounded-[10px] border border-fpl-border bg-fpl-card" />
+      <div className="rounded-[10px] border border-fpl-border bg-fpl-card p-4">
+        <div className="mb-4 flex gap-2">
+          {[3, 5, 8].map((item) => <div key={item} className="skeleton h-8 w-16" />)}
+        </div>
+        <div className="grid gap-2 md:grid-cols-5">
+          {[0, 1, 2, 3, 4].map((item) => (
+            <div key={item} className="skeleton h-24" />
+          ))}
+        </div>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="rounded-[10px] border border-fpl-border bg-fpl-card p-5">
+          <div className="skeleton h-5 w-48" />
+          <div className="mt-4 space-y-3">
+            {[0, 1, 2, 3, 4].map((item) => <div key={item} className="skeleton h-14" />)}
+          </div>
+        </div>
+        <div className="rounded-[10px] border border-fpl-border bg-fpl-card p-5">
+          <div className="skeleton h-5 w-40" />
+          <div className="mt-4 space-y-3">
+            {[0, 1, 2].map((item) => <div key={item} className="skeleton h-10" />)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ErrorState() {
   return (
     <div className="rounded-[10px] border border-border-muted bg-card p-5 text-sm text-muted">

@@ -3,6 +3,7 @@ import asyncio
 import pandas as pd
 from api.main import app
 from api.routers import fpl_live
+from api.routers import planner as planner_router
 from api.routers import players as players_router
 from api.routers import predictions as predictions_router
 from api.routers.fixtures import _ticker_from_named_fixtures
@@ -292,6 +293,100 @@ def test_season_state_returns_central_source_metadata(monkeypatch):
     assert payload["difficulty_source"] == "App-estimated difficulty"
     assert payload["current_gw"] == 1
     assert payload["next_gw"] == 2
+
+
+def test_planner_requires_connected_team():
+    response = asyncio.run(_get("/api/predictions/planner?horizon=3"))
+
+    assert response.status_code == 400
+    assert "team ID" in response.json()["detail"]
+
+
+def test_planner_rejects_unsupported_horizon_before_fetching_data():
+    response = asyncio.run(_get("/api/predictions/planner?team_id=5605168&horizon=4"))
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "horizon must be one of 3, 5, or 8"
+
+
+def test_planner_returns_squad_and_baseline(monkeypatch):
+    async def fake_bootstrap():
+        return {
+            "events": [
+                {"id": 1, "is_current": True},
+                {"id": 2, "is_next": True},
+            ],
+            "teams": [{"id": 1, "name": "Example FC", "short_name": "EXM", "code": 1}],
+            "element_types": [{"id": 3, "singular_name_short": "MID"}],
+            "elements": [
+                {
+                    "id": 10,
+                    "first_name": "Example",
+                    "second_name": "Midfielder",
+                    "web_name": "Example",
+                    "team": 1,
+                    "element_type": 3,
+                    "now_cost": 60,
+                    "selected_by_percent": "10.0",
+                }
+            ],
+            "game_settings": {"max_extra_free_transfers": 4},
+        }
+
+    async def fake_team(team_id):
+        return {"last_deadline_bank": 15, "free_transfers": 1}
+
+    async def fake_picks(team_id, gw):
+        return {"picks": [{"element": 10, "position": 1, "is_captain": True}]}
+
+    async def fake_fixtures():
+        return []
+
+    projected = [
+        {
+            "element_id": 10,
+            "name": "Example Midfielder",
+            "web_name": "Example",
+            "team": "EXM",
+            "team_code": 1,
+            "position": "MID",
+            "price": 6.0,
+            "start_likelihood": 0.8,
+            "projections": [
+                {
+                    "gameweek": 2,
+                    "projected_points": 4.2,
+                    "blank": False,
+                    "double": False,
+                    "fixtures": [],
+                }
+            ],
+        }
+    ]
+
+    monkeypatch.setattr(planner_router.fpl_client, "get_bootstrap", fake_bootstrap)
+    monkeypatch.setattr(planner_router.fpl_client, "get_team", fake_team)
+    monkeypatch.setattr(planner_router.fpl_client, "get_team_picks", fake_picks)
+    monkeypatch.setattr(planner_router.fpl_client, "get_fixtures", fake_fixtures)
+    monkeypatch.setattr(
+        planner_router.data_service,
+        "players",
+        lambda: pd.DataFrame([{"player_name": "Example Midfielder"}]),
+    )
+    monkeypatch.setattr(planner_router.data_service, "historical_player_gw", lambda: pd.DataFrame())
+    monkeypatch.setattr(planner_router, "load_planner_models", lambda: (object(), object()))
+    monkeypatch.setattr(planner_router, "project_players", lambda *args, **kwargs: projected)
+
+    response = asyncio.run(_get("/api/predictions/planner?team_id=10&horizon=3"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["start_gameweek"] == 2
+    assert payload["bank_value"] == 1.5
+    assert payload["free_transfers_available"] == 1
+    assert payload["max_extra_free_transfers"] == 4
+    assert payload["squad"][0]["is_starter"] is True
+    assert payload["baseline"][0]["projected_points"] == 4.2
 
 
 def test_backtest_accuracy_uses_plain_english_model_names():

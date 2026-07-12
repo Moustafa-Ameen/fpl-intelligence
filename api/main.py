@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import backtest, fixtures, fpl_live, players, predictions
+from api.routers import backtest, fixtures, fpl_live, planner, players, predictions
 
 app = FastAPI(title="FPL Intelligence API")
 
@@ -15,6 +15,7 @@ app.add_middleware(
 app.include_router(players.router)
 app.include_router(fixtures.router)
 app.include_router(predictions.router)
+app.include_router(planner.router)
 app.include_router(fpl_live.router)
 app.include_router(backtest.router)
 
