@@ -18,7 +18,7 @@ import {
   getPlayerHistory,
   getPlayers,
 } from "@/lib/api";
-import { points, positionCode } from "@/lib/format";
+import { normalized, points, positionCode } from "@/lib/format";
 import type { CaptainPick, FixtureTick, Player, PlayerHistoryPoint } from "@/lib/types";
 import { useDrawer } from "@/context/DrawerContext";
 import { FixtureChip } from "./FixtureChip";
@@ -59,14 +59,14 @@ export function PlayerDrawer() {
     ]).then(([players, predictions, historyRows, fixtureRows]) => {
       if (cancelled) return;
       const found =
-        players.find((row) => row.name.toLowerCase() === playerName.toLowerCase()) ??
-        players.find((row) => row.name.toLowerCase().includes(playerName.toLowerCase()));
+        players.find((row) => normalized(row.name) === normalized(playerName)) ??
+        players.find((row) => normalized(row.name).includes(normalized(playerName)));
       const idRankIndex = found
         ? predictions.findIndex((row) => playerKey(row) === playerKey(found))
         : -1;
       const rankIndex = idRankIndex >= 0
         ? idRankIndex
-        : predictions.findIndex((row) => row.name.toLowerCase() === playerName.toLowerCase());
+        : predictions.findIndex((row) => normalized(row.name) === normalized(playerName));
       setPlayer(found ?? null);
       setPrediction(predictions[rankIndex] ?? null);
       setCaptainRank(rankIndex >= 0 ? rankIndex + 1 : null);
@@ -227,7 +227,7 @@ export function PlayerDrawer() {
 }
 
 function playerKey(player: Pick<Player, "element_id" | "name"> | Pick<CaptainPick, "element_id" | "name">): string {
-  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
+  return player.element_id ? `id:${player.element_id}` : `name:${normalized(player.name)}`;
 }
 
 function PlayerDrawerSkeleton() {

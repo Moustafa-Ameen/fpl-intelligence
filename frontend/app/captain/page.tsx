@@ -9,7 +9,7 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
 import { useDrawer } from "@/context/DrawerContext";
 import { getCaptaincyPredictions, getCurrentGameweek, getSeasonState, getSquad } from "@/lib/api";
-import { kitUrl, points, positionCode } from "@/lib/format";
+import { kitUrl, normalized, points, positionCode } from "@/lib/format";
 import type { CaptainPick, SeasonState, SquadPlayer } from "@/lib/types";
 
 export default function CaptainPage() {
@@ -55,7 +55,7 @@ export default function CaptainPage() {
       squad
         .map((player) => {
           const prediction = picks.find((pick) => playerKey(pick) === playerKey(player))
-            ?? picks.find((pick) => pick.name.toLowerCase() === player.name.toLowerCase());
+            ?? picks.find((pick) => normalized(pick.name) === normalized(player.name));
           return toCaptainPick(player, prediction);
         })
         .sort((a, b) => score(b) - score(a)),
@@ -266,5 +266,5 @@ function MethodStep({ label, value, accent = false }: { label: string; value: st
 }
 
 function playerKey(player: Pick<CaptainPick, "element_id" | "name"> | Pick<SquadPlayer, "element_id" | "name">): string {
-  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
+  return player.element_id ? `id:${player.element_id}` : `name:${normalized(player.name)}`;
 }

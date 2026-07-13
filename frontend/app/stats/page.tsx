@@ -8,7 +8,7 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
 import { useDrawer } from "@/context/DrawerContext";
 import { getPlayers } from "@/lib/api";
-import { kitUrl, points, positionCode, price } from "@/lib/format";
+import { kitUrl, matchesPlayerSearch, points, positionCode, price } from "@/lib/format";
 import type { Player } from "@/lib/types";
 
 type ViewMode = "table" | "card";
@@ -67,13 +67,12 @@ export default function StatsPage() {
   }, [players]);
 
   const filtered = useMemo(() => {
-    const searchTerm = search.trim().toLowerCase();
     const min = minPrice ? Number(minPrice) : Number.NEGATIVE_INFINITY;
     const max = maxPrice ? Number(maxPrice) : Number.POSITIVE_INFINITY;
     return players
       .filter((player) => listMode === "all" || watchlist.includes(player.name))
       .filter((player) => position === "All" || positionCode(player.position) === position)
-      .filter((player) => !searchTerm || player.name.toLowerCase().includes(searchTerm))
+      .filter((player) => matchesPlayerSearch(search, player.name))
       .filter((player) => player.price >= min && player.price <= max)
       .sort((a, b) => compareValues(valueForSort(a, sortKey), valueForSort(b, sortKey), ascending));
   }, [ascending, listMode, maxPrice, minPrice, players, position, search, sortKey, watchlist]);

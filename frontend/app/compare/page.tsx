@@ -1,7 +1,7 @@
 "use client";
 
 import { Info, Search, Scale, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FixtureChip } from "@/components/FixtureChip";
 import { ErrorState, TableSkeleton } from "@/components/LoadingState";
 import { Panel } from "@/components/Panel";
@@ -12,6 +12,7 @@ import {
   displayTeam,
   displayTeamShort,
   kitUrl,
+  matchesPlayerSearch,
   positionCode,
 } from "@/lib/format";
 import type { ComparisonPlayer, Player, PlayerComparisonResponse } from "@/lib/types";
@@ -133,6 +134,7 @@ export default function ComparePage() {
               onFocus={() => setOpenSlot(slot)}
               onSelect={(choice) => choosePlayer(slot, choice)}
               onClear={() => clearPlayer(slot)}
+              onClose={() => setOpenSlot(null)}
             />
           ))}
         </div>
@@ -170,6 +172,7 @@ function PlayerSlot({
   onFocus,
   onSelect,
   onClear,
+  onClose,
 }: {
   slot: number;
   player: Player | null;
@@ -180,9 +183,31 @@ function PlayerSlot({
   onFocus: () => void;
   onSelect: (player: Player) => void;
   onClear: () => void;
+  onClose: () => void;
 }) {
+  const slotRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!slotRef.current?.contains(event.target as Node)) onClose();
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, open]);
+
   return (
-    <div className="relative min-h-[88px] rounded-lg border border-fpl-border bg-fpl-raised p-3">
+    <div ref={slotRef} className="relative min-h-[88px] rounded-lg border border-fpl-border bg-fpl-raised p-3">
       <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.08em] text-muted">
         Player {slot + 1}
         {player ? (
@@ -450,15 +475,10 @@ function suggestionsForSlot(
   query: string,
   slot: number,
 ): Player[] {
-  const term = query.trim().toLowerCase();
   return players
     .filter((player) => player.element_id != null)
     .filter((player) => !selected.some((item, index) => index !== slot && item?.element_id === player.element_id))
-    .filter((player) => {
-      if (!term) return true;
-      const searchText = `${player.name} ${player.web_name ?? ""} ${player.team}`.toLowerCase();
-      return searchText.includes(term);
-    })
+    .filter((player) => matchesPlayerSearch(query, player.name, player.web_name, player.team))
     .slice(0, 7);
 }
 

@@ -10,7 +10,7 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { StartLikelihood } from "@/components/StartLikelihood";
 import { useDrawer } from "@/context/DrawerContext";
 import { getCurrentGameweek, getPlayers, getSeasonState, getSquad, getTeam } from "@/lib/api";
-import { displayPlayerName, displayTeam, kitUrl, points, positionCode, price } from "@/lib/format";
+import { displayPlayerName, displayTeam, kitUrl, normalized, points, positionCode, price } from "@/lib/format";
 import { playerXp, selectCurrentSquadMetrics } from "@/lib/squadMetrics";
 import type { Player, SeasonState, SquadPlayer, TeamData } from "@/lib/types";
 
@@ -604,5 +604,5 @@ function dropScore(player: Candidate): number {
 }
 
 function playerKey(player: Pick<Player, "element_id" | "name"> | Pick<SquadPlayer, "element_id" | "name">): string {
-  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
+  return player.element_id ? `id:${player.element_id}` : `name:${normalized(player.name)}`;
 }

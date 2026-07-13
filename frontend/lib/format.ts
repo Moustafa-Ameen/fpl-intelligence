@@ -120,12 +120,20 @@ const PLAYER_NAME_OVERRIDES: Record<string, string> = {
   "marcos senesi barón": "Marcos Senesi",
 };
 
-function normalized(value: string | null | undefined): string {
+export function normalized(value: string | null | undefined): string {
   return (value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+}
+
+export function matchesPlayerSearch(
+  query: string | null | undefined,
+  ...values: (string | null | undefined)[]
+): boolean {
+  const term = normalized(query);
+  return !term || values.some((value) => normalized(value).includes(term));
 }
 
 export function displayPlayerName(name: string, webName?: string | null): string {

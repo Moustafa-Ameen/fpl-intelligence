@@ -13,7 +13,7 @@ import { StatCard } from "@/components/StatCard";
 import { useDrawer } from "@/context/DrawerContext";
 import { getCurrentGameweek, getSquad } from "@/lib/api";
 import { fixtureTickerRows, visibleFixtures } from "@/lib/fixtures";
-import { displayPlayerName, displayTeam, kitUrl, points, positionCode } from "@/lib/format";
+import { displayPlayerName, displayTeam, kitUrl, normalized, points, positionCode } from "@/lib/format";
 import { selectCurrentSquadMetrics } from "@/lib/squadMetrics";
 import type {
   AccuracyResult,
@@ -493,7 +493,7 @@ function projectionRows(players: ProjectionPlayer[]) {
 }
 
 function playerKey(player: Pick<Player, "element_id" | "name"> | Pick<SquadPlayer, "element_id" | "name"> | Pick<TransferTarget, "element_id" | "name">): string {
-  return player.element_id ? `id:${player.element_id}` : `name:${player.name.toLowerCase()}`;
+  return player.element_id ? `id:${player.element_id}` : `name:${normalized(player.name)}`;
 }
 
 function ProofMetric({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {

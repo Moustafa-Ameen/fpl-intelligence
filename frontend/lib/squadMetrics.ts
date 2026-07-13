@@ -1,4 +1,4 @@
-import { positionCode } from "./format";
+import { normalized, positionCode } from "./format";
 import type { SquadPlayer } from "./types";
 
 export interface CurrentSquadMetrics {
@@ -26,7 +26,7 @@ export function selectCurrentSquadMetrics(squad: SquadPlayer[]): CurrentSquadMet
     };
   }
 
-  const xPByName = new Map(squad.map((player) => [player.name.toLowerCase(), playerXp(player)]));
+  const xPByName = new Map(squad.map((player) => [normalized(player.name), playerXp(player)]));
   const starters = squad.slice(0, 11);
   const bench = squad.slice(11);
   const captainRows = [...starters].sort((a, b) => playerXp(b) - playerXp(a));
