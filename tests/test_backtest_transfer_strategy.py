@@ -1,6 +1,13 @@
 import pandas as pd
 
-from fpl_intelligence.backtest_transfer_strategy import choose_transfer, validate_squad
+from fpl_intelligence.backtest_transfer_strategy import (
+    build_initial_squad,
+    choose_transfer,
+    score_gameweek,
+    select_starting_xi,
+    validate_squad,
+)
+from fpl_intelligence.step4_models import load_historical_player_gameweeks
 
 
 def _squad_rows() -> list[dict[str, object]]:
@@ -97,3 +104,59 @@ def test_choose_transfer_rejects_over_budget_move():
     )
 
     assert not decision.made
+
+
+def test_score_gameweek_doubles_highest_scoring_starter_and_excludes_bench():
+    squad = pd.DataFrame(_squad_rows())
+    projections = {int(player_id): 1.0 for player_id in squad["player_id"]}
+    lineup = select_starting_xi(squad, projections)
+    target = squad[["player_id"]].copy()
+    target["minutes"] = 90
+    target["next_gameweek_points"] = 0
+    target.loc[target["player_id"] == lineup.starting_ids[0], "next_gameweek_points"] = 5
+    target.loc[target["player_id"].isin(lineup.starting_ids[1:]), "next_gameweek_points"] = 2
+    target.loc[target["player_id"].isin(lineup.bench_ids), "next_gameweek_points"] = 100
+
+    score = score_gameweek(squad, target, projections)
+
+    assert score.raw_starter_points == 25
+    assert score.points == 30
+    assert score.captain_id == lineup.starting_ids[0]
+    assert score.autosub_ids == ()
+
+
+def test_score_gameweek_autosubs_a_non_playing_goalkeeper():
+    squad = pd.DataFrame(_squad_rows())
+    projections = {int(player_id): 1.0 for player_id in squad["player_id"]}
+    lineup = select_starting_xi(squad, projections)
+    bench_goalkeeper = next(
+        player_id
+        for player_id in lineup.bench_ids
+        if squad.loc[squad["player_id"] == player_id, "position"].iloc[0] == "GK"
+    )
+    target = squad[["player_id"]].copy()
+    target["minutes"] = 90
+    target["next_gameweek_points"] = 1
+    starting_goalkeeper = next(
+        player_id
+        for player_id in lineup.starting_ids
+        if squad.loc[squad["player_id"] == player_id, "position"].iloc[0] == "GK"
+    )
+    target.loc[target["player_id"] == starting_goalkeeper, "minutes"] = 0
+    target.loc[target["player_id"] == starting_goalkeeper, "next_gameweek_points"] = 0
+    target.loc[target["player_id"] == bench_goalkeeper, "next_gameweek_points"] = 4
+
+    score = score_gameweek(squad, target, projections)
+
+    assert score.autosub_ids == (bench_goalkeeper,)
+    assert bench_goalkeeper in score.starting_ids
+    assert score.raw_starter_points == 14
+    assert score.points == 18
+
+
+def test_initial_squad_excludes_players_below_preseason_minutes_floor():
+    players = load_historical_player_gameweeks()
+
+    squad = build_initial_squad(players)
+
+    assert (squad["prior_minutes"] >= 900).all()

@@ -3,7 +3,8 @@
 This module is intentionally separate from the live planner. It answers a narrow
 research question: what would a deterministic, model-driven one-transfer rule
 have done across 2025-26 if it only used information available before each
-gameweek?
+gameweek? The score uses a projected legal starting XI, basic autosubs, and
+an intentionally hindsight-optimal captain.
 
 It is not an automatic transfer recommender for the app. The initial squad is a
 reproducible heuristic, and the strategy uses a one-transfer-per-gameweek rule
@@ -40,8 +41,19 @@ INITIAL_BUDGET = 100.0
 MAX_PLAYERS_PER_TEAM = 3
 FREE_TRANSFER_CAP = 4
 DEFAULT_GAIN_THRESHOLD = 2.0
+MIN_PRESEASON_MINUTES = 900
 POSITION_QUOTAS = {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
 POSITION_ORDER = tuple(POSITION_QUOTAS)
+VALID_FORMATIONS = (
+    (3, 4, 3),
+    (3, 5, 2),
+    (4, 3, 3),
+    (4, 4, 2),
+    (4, 5, 1),
+    (5, 2, 3),
+    (5, 3, 2),
+    (5, 4, 1),
+)
 
 MODEL_BUILDERS: dict[str, Callable[[], Pipeline]] = {
     "Ridge Regression": build_ridge_model,
@@ -88,11 +100,46 @@ class BacktestResult:
     transfers_made: int
 
 
+@dataclass(frozen=True)
+class LineupSelection:
+    starting_ids: tuple[int, ...]
+    bench_ids: tuple[int, ...]
+    formation: str
+
+
+@dataclass(frozen=True)
+class GameweekScore:
+    points: float
+    raw_starter_points: float
+    captain_id: int | None
+    starting_ids: tuple[int, ...]
+    bench_ids: tuple[int, ...]
+    autosub_ids: tuple[int, ...]
+    formation: str
+
+
 def position_group(position: Any) -> str:
     """Map the historical position labels to the four FPL squad buckets."""
 
     value = str(position or "").upper()
     return "MID" if value == "AM" else value
+
+
+def _formation_name(formation: tuple[int, int, int]) -> str:
+    return "-".join(str(value) for value in formation)
+
+
+def _is_legal_starting_xi(positions: list[str]) -> bool:
+    counts = pd.Series(positions).value_counts().to_dict()
+    outfield_count = len(positions) - counts.get("GK", 0)
+    return (
+        len(positions) == 11
+        and counts.get("GK", 0) == 1
+        and 3 <= counts.get("DEF", 0) <= 5
+        and 2 <= counts.get("MID", 0) <= 5
+        and 1 <= counts.get("FWD", 0) <= 3
+        and outfield_count == 10
+    )
 
 
 def validate_squad(
@@ -202,9 +249,25 @@ def _choose_cheapest_valid_squad(candidates: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_initial_squad(players: pd.DataFrame) -> pd.DataFrame:
-    """Select a fixed, legal GW1 squad and improve it by one-for-one upgrades."""
+    """Select a fixed, legal GW1 squad and improve it by one-for-one upgrades.
+
+    The 900-minute prior-season floor removes fringe players before the value
+    ranking is used. This is a deliberately simple proxy for being an established
+    first-team option in the preseason snapshot.
+    """
 
     candidates = build_preseason_scores(players)
+    candidates = candidates[candidates["prior_minutes"] >= MIN_PRESEASON_MINUTES].copy()
+    missing_positions = [
+        position
+        for position, required in POSITION_QUOTAS.items()
+        if int((candidates["position_group"] == position).sum()) < required
+    ]
+    if missing_positions:
+        raise ValueError(
+            "The preseason minutes filter left too few candidates for: "
+            + ", ".join(missing_positions)
+        )
     squad = _choose_cheapest_valid_squad(candidates)
 
     # Starting from a cheap valid squad makes the budget constraint explicit. Repeatedly
@@ -366,9 +429,118 @@ def _apply_transfer(
     return updated
 
 
-def _actual_points(squad: pd.DataFrame, target: pd.DataFrame) -> float:
-    points = target.set_index("player_id")["next_gameweek_points"].to_dict()
-    return float(sum(float(points.get(int(player_id), 0)) for player_id in squad["player_id"]))
+def select_starting_xi(
+    squad: pd.DataFrame,
+    projected_points: dict[int, float],
+) -> LineupSelection:
+    """Choose the highest-projected legal formation and order its bench."""
+
+    working = squad.copy()
+    working["position_group"] = working["position"].map(position_group)
+    working["_projection"] = (
+        working["player_id"].map(projected_points).fillna(0.0).astype(float)
+    )
+    best_selection: tuple[float, tuple[int, ...], tuple[int, int, int]] | None = None
+
+    for formation in VALID_FORMATIONS:
+        selected: list[int] = []
+        feasible = True
+        for position, count in zip(("GK", "DEF", "MID", "FWD"), (1, *formation), strict=True):
+            pool = working[working["position_group"] == position].sort_values(
+                ["_projection", "player_id"], ascending=[False, True]
+            )
+            if len(pool) < count:
+                feasible = False
+                break
+            selected.extend(int(value) for value in pool.head(count)["player_id"])
+        if not feasible:
+            continue
+        projection_sum = float(working[working["player_id"].isin(selected)]["_projection"].sum())
+        selection_key = (projection_sum, tuple(-player_id for player_id in selected), formation)
+        if best_selection is None or selection_key > best_selection:
+            best_selection = selection_key
+
+    if best_selection is None:
+        raise ValueError("Could not construct a legal starting XI from the squad")
+
+    _, selected_key, formation = best_selection
+    starting_ids = tuple(-player_id for player_id in selected_key)
+    starting_set = set(starting_ids)
+    bench = working[~working["player_id"].isin(starting_set)].copy()
+    bench_gk = bench[bench["position_group"] == "GK"].sort_values(
+        ["_projection", "player_id"], ascending=[False, True]
+    )
+    bench_outfield = bench[bench["position_group"] != "GK"].sort_values(
+        ["_projection", "player_id"], ascending=[False, True]
+    )
+    bench_ids = tuple(
+        [int(value) for value in bench_gk["player_id"]]
+        + [int(value) for value in bench_outfield["player_id"]]
+    )
+    return LineupSelection(starting_ids, bench_ids, _formation_name(formation))
+
+
+def score_gameweek(
+    squad: pd.DataFrame,
+    target: pd.DataFrame,
+    projected_points: dict[int, float],
+) -> GameweekScore:
+    """Score a squad using XI-only points, basic autosubs, and hindsight captaincy."""
+
+    lineup = select_starting_xi(squad, projected_points)
+    target_rows = target.drop_duplicates("player_id").set_index("player_id")
+    minutes = target_rows["minutes"].to_dict()
+    points = target_rows["next_gameweek_points"].to_dict()
+    positions = {
+        int(row.player_id): position_group(row.position) for row in squad.itertuples()
+    }
+    active_ids = list(lineup.starting_ids)
+    used_bench: set[int] = set()
+    autosub_ids: list[int] = []
+
+    for starter_id in lineup.starting_ids:
+        if float(minutes.get(starter_id, 0)) != 0:
+            continue
+        starter_position = positions[starter_id]
+        for bench_id in lineup.bench_ids:
+            if bench_id in used_bench or float(minutes.get(bench_id, 0)) <= 0:
+                continue
+            bench_position = positions[bench_id]
+            if bench_position == "GK" and starter_position != "GK":
+                continue
+            if bench_position != "GK" and starter_position == "GK":
+                continue
+            proposed_positions = [
+                positions[player_id] if player_id != starter_id else bench_position
+                for player_id in active_ids
+            ]
+            if not _is_legal_starting_xi(proposed_positions):
+                continue
+            active_index = active_ids.index(starter_id)
+            active_ids[active_index] = bench_id
+            used_bench.add(bench_id)
+            autosub_ids.append(bench_id)
+            break
+
+    captain_id = max(
+        active_ids,
+        key=lambda player_id: (
+            float(points.get(player_id, 0)),
+            float(projected_points.get(player_id, 0)),
+            -player_id,
+        ),
+    )
+    raw_starter_points = float(sum(float(points.get(player_id, 0)) for player_id in active_ids))
+    total_points = raw_starter_points + float(points.get(captain_id, 0))
+    return GameweekScore(
+        points=total_points,
+        raw_starter_points=raw_starter_points,
+        captain_id=captain_id,
+        starting_ids=tuple(active_ids),
+        bench_ids=lineup.bench_ids,
+        autosub_ids=tuple(autosub_ids),
+        formation=lineup.formation,
+    )
 
 
 def run_transfer_strategy_backtest(
@@ -393,6 +565,9 @@ def run_transfer_strategy_backtest(
     baseline_points = 0.0
     total_hit_cost = 0
     transfers_made = 0
+    preseason_projection = build_preseason_scores(players).set_index("player_id")[
+        "preseason_value_score"
+    ].to_dict()
 
     if verbose:
         print(f"Diagnostic transfer strategy backtest ({TEST_SEASON})")
@@ -412,11 +587,14 @@ def run_transfer_strategy_backtest(
         squad["price"] = squad["player_id"].map(prices).fillna(squad["price"])
         bank_before = bank
         free_transfers_before = free_transfers
-        baseline_points_gw = _actual_points(initial_squad, target)
 
         decision = TransferDecision(None, None, None, None, 0.0, 0.0, 0, None, None)
+        projected_points = preseason_projection
         if gameweek >= 2:
             predictions = train_gameweek_predictions(players, gameweek, model_name)
+            projected_points = predictions.set_index("player_id")[
+                "expected_points_adjusted"
+            ].to_dict()
             decision = choose_transfer(
                 squad,
                 predictions,
@@ -431,7 +609,10 @@ def run_transfer_strategy_backtest(
                 total_hit_cost += decision.hit_cost
                 transfers_made += 1
 
-        strategy_points_gw = _actual_points(squad, target)
+        strategy_score = score_gameweek(squad, target, projected_points)
+        baseline_score = score_gameweek(initial_squad, target, projected_points)
+        strategy_points_gw = strategy_score.points
+        baseline_points_gw = baseline_score.points
         strategy_points += strategy_points_gw - decision.hit_cost
         baseline_points += baseline_points_gw
         result_rows.append(
@@ -440,6 +621,8 @@ def run_transfer_strategy_backtest(
                 "gameweek": gameweek,
                 "strategy_points": strategy_points_gw,
                 "baseline_points": baseline_points_gw,
+                "strategy_raw_starter_points": strategy_score.raw_starter_points,
+                "baseline_raw_starter_points": baseline_score.raw_starter_points,
                 "hit_cost": decision.hit_cost,
                 "strategy_net_points": strategy_points_gw - decision.hit_cost,
                 "cumulative_strategy_points": strategy_points,
@@ -449,6 +632,12 @@ def run_transfer_strategy_backtest(
                 "incoming": decision.incoming_name,
                 "projected_gain": round(decision.projected_gain, 3),
                 "net_projected_gain": round(decision.net_projected_gain, 3),
+                "strategy_captain_id": strategy_score.captain_id,
+                "baseline_captain_id": baseline_score.captain_id,
+                "strategy_formation": strategy_score.formation,
+                "baseline_formation": baseline_score.formation,
+                "strategy_autosubs": "+".join(str(value) for value in strategy_score.autosub_ids),
+                "baseline_autosubs": "+".join(str(value) for value in baseline_score.autosub_ids),
                 "bank_before": round(bank_before, 1),
                 "free_transfers_before": free_transfers_before,
             }
@@ -464,6 +653,7 @@ def run_transfer_strategy_backtest(
             )
             print(
                 f"- GW{gameweek:02d}: {transfer_text}; actual {strategy_points_gw:.1f} pts"
+                f"; captain {strategy_score.captain_id}; autosubs {len(strategy_score.autosub_ids)}"
                 f"; hit -{decision.hit_cost}; bank GBP {bank:.1f}m; FT next {free_transfers}"
             )
 
@@ -497,24 +687,28 @@ def print_summary(result: BacktestResult, results_path: Path | None = RESULTS_PA
         "recommendation engine."
     )
     print(
-        "- The GW1 squad is a fixed heuristic based on prior-season output, value, "
-        "minutes, and GW1 ownership."
+        f"- The GW1 squad excludes players below {MIN_PRESEASON_MINUTES} prior-season "
+        "minutes, then uses prior-season output, value, and GW1 ownership."
     )
     print(
         "- The rule considers at most one transfer per gameweek and uses a "
         "projected-gain threshold."
     )
     print(
-        "- It does not model injuries/news, press conferences, price-change timing, "
-        "selling-value rules, captaincy, chips, bench order, or manager behaviour."
+        "- It models a highest-projected legal formation, XI-only points, basic autosubs, "
+        "and one captain doubled each gameweek."
     )
     print(
-        "- For this diagnostic, actual points are summed across all 15 roster slots; "
-        "it is not an XI score simulation."
+        "- Captaincy always picks the highest-scoring starter in hindsight. This is "
+        "optimistic and treats captaincy as solved so the diagnostic tests transfers."
+    )
+    print(
+        "- It still does not model chips, injuries/news, press conferences, price-change "
+        "timing, selling-value rules, or manager behaviour."
     )
     print(
         "- Historical blanks, doubles, and missing player-gameweek rows are treated "
-        "as zero points for that row."
+        "as zero points for that player-gameweek."
     )
     if results_path is not None:
         results_path.parent.mkdir(parents=True, exist_ok=True)
