@@ -40,6 +40,8 @@ def test_add_rule_based_scores_adds_expected_columns():
         "ownership_risk",
         "captain_score",
         "transfer_score",
+        "defensive_contribution_per_90",
+        "defensive_contribution_per_90_norm",
     }
     assert expected_columns.issubset(ranked.columns)
     assert ranked.loc[0, "minutes_security"] == 1.0

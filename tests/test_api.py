@@ -49,6 +49,8 @@ def test_transfers_includes_rotation_risk_boolean():
     transfers = response.json()
     assert len(transfers) > 0
     assert isinstance(transfers[0]["rotation_risk"], bool)
+    assert "defensive_contribution_per_90" in transfers[0]
+    assert "safety_tier" in transfers[0]
 
 
 def test_players_form_falls_back_to_recent_history_when_snapshot_is_zero(monkeypatch):

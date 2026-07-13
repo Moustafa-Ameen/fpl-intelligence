@@ -22,6 +22,7 @@ PLAYERS_RANKED_REQUIRED_COLUMNS = [
     "value_score",
     "captain_score",
     "transfer_score",
+    "defensive_contribution_per_90",
 ]
 
 PLAYERS_RANKED_NUMERIC_COLUMNS = [
@@ -36,6 +37,9 @@ PLAYERS_RANKED_NUMERIC_COLUMNS = [
     "ownership_risk",
     "captain_score",
     "transfer_score",
+    "defensive_contribution",
+    "defensive_contribution_per_90",
+    "defensive_contribution_per_90_norm",
 ]
 
 

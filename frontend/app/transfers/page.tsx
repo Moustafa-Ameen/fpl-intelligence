@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, ChevronDown, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowRight, ChevronDown, Info, TrendingDown, TrendingUp } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, ErrorState, TableSkeleton } from "@/components/LoadingState";
@@ -29,6 +29,7 @@ export default function TransfersPage() {
   const [tab, setTab] = useState<Tab>("best");
   const [position, setPosition] = useState<PositionFilter>("All");
   const [expanded, setExpanded] = useState(false);
+  const [showDefconInfo, setShowDefconInfo] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [seasonState, setSeasonState] = useState<SeasonState | null>(null);
@@ -225,6 +226,7 @@ export default function TransfersPage() {
                     <th className="pb-3 pr-3 text-right">Predicted</th>
                     <th className="pb-3 pr-3 text-right">Start %</th>
                     <th className="pb-3 pr-3 text-right">Ownership</th>
+                    <th className="pb-3 pr-3 text-right">DefCon / 90</th>
                     <th className="pb-3 text-right">Signal</th>
                   </tr>
                 </thead>
@@ -262,6 +264,11 @@ export default function TransfersPage() {
                       <td className="py-3 pr-3 text-right font-mono text-primary">
                         {points(player.selected_by_percent, 0)}%
                       </td>
+                      <td className="py-3 pr-3 text-right font-mono text-secondary">
+                        {positionCode(player.position) === "GK"
+                          ? "-"
+                          : points(player.defensive_contribution_per_90)}
+                      </td>
                       <td className="py-3 text-right">
                         <TransferSignal player={player} />
                       </td>
@@ -270,6 +277,33 @@ export default function TransfersPage() {
                 </tbody>
               </table>
             </div>
+          </Panel>
+
+          <Panel>
+            <button
+              type="button"
+              onClick={() => setShowDefconInfo((value) => !value)}
+              className="flex w-full items-center justify-between gap-3 text-left"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-primary">
+                <Info className="h-4 w-4 text-fpl-green" />
+                What are Defensive Contributions?
+              </span>
+              <span className="text-xs text-muted">{showDefconInfo ? "Hide" : "Show"}</span>
+            </button>
+            {showDefconInfo ? (
+              <div className="mt-4 space-y-2 text-sm leading-6 text-secondary">
+                <p>
+                  FPL awards 2 points when a player reaches the Defensive Contributions threshold in a
+                  gameweek: 10 combined clearances, blocks, interceptions, or tackles for defenders, and
+                  12 combined defensive actions for midfielders and forwards.
+                </p>
+                <p>
+                  The rate shown above is per 90 minutes. A strong rate can make a defensive-minded
+                  budget player a useful enabler even when their attacking points or price look modest.
+                </p>
+              </div>
+            ) : null}
           </Panel>
         </div>
       ) : (
@@ -422,6 +456,8 @@ function TransferSignal({ player }: { player: Candidate }) {
   const start = player.start_likelihood ?? 0;
   const score = player.transfer_score ?? 0;
   if (start < 0.4) return <SignalPill tone="amber">Minutes risk</SignalPill>;
+  if (player.safety_tier === "Risky") return <SignalPill tone="amber">Risky</SignalPill>;
+  if (player.safety_tier === "Safe") return <SignalPill tone="green">Safe</SignalPill>;
   if (score >= 0.45) return <SignalPill tone="green">Strong buy</SignalPill>;
   if ((player.selected_by_percent ?? 0) >= 25) return <SignalPill tone="gold">Template</SignalPill>;
   return <SignalPill tone="muted">Watch</SignalPill>;

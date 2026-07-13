@@ -12,6 +12,9 @@ export interface Player {
   captain_score: number;
   transfer_score: number;
   selected_by_percent?: number;
+  defensive_contribution?: number;
+  defensive_contribution_per_90?: number;
+  safety_tier?: "Safe" | "Risky" | "";
   web_name?: string;
   team_code?: number;
   reasoning?: string;
@@ -48,6 +51,9 @@ export interface TransferTarget {
   transfer_score: number;
   selected_by_percent?: number;
   rotation_risk?: boolean;
+  defensive_contribution?: number;
+  defensive_contribution_per_90?: number;
+  safety_tier?: "Safe" | "Risky" | "";
   team_code?: number;
 }
 

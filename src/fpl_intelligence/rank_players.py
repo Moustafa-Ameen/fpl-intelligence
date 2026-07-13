@@ -26,6 +26,10 @@ FORMULA_EXPLANATIONS = {
         "0.70 * value_score_norm + 0.20 * form_norm - 0.10 * ownership_risk. Transfers prioritize "
         "value, reward form, and apply a small penalty for low-ownership risk."
     ),
+    "defensive_contribution_per_90": (
+        "Live-only defensive actions per 90 rate. It is carried through for rule-based "
+        "safety tiers and is intentionally not an ML training feature."
+    ),
 }
 
 
@@ -47,6 +51,14 @@ def add_rule_based_scores(players: pd.DataFrame) -> pd.DataFrame:
     max_minutes = ranked["minutes"].max()
     ranked["minutes_security"] = (ranked["minutes"] / max_minutes).clip(lower=0, upper=1)
     ranked["ownership_risk"] = (1 - ranked["selected_by_percent"] / 100).clip(lower=0, upper=1)
+    if "defensive_contribution_per_90" not in ranked:
+        ranked["defensive_contribution_per_90"] = 0.0
+    ranked["defensive_contribution_per_90"] = pd.to_numeric(
+        ranked["defensive_contribution_per_90"], errors="coerce"
+    ).fillna(0.0)
+    ranked["defensive_contribution_per_90_norm"] = normalize(
+        ranked["defensive_contribution_per_90"]
+    )
 
     points_per_game_norm = normalize(ranked["points_per_game"])
     form_norm = normalize(ranked["form"])

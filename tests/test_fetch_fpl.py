@@ -17,6 +17,8 @@ def test_load_players_adds_display_columns():
                 "form": "8.1",
                 "minutes": 3100,
                 "selected_by_percent": "55.0",
+                "defensive_contribution": 42,
+                "defensive_contribution_per_90": 5.2,
             }
         ],
         "teams": [{"id": 1, "name": "Liverpool", "short_name": "LIV"}],
@@ -30,3 +32,4 @@ def test_load_players_adds_display_columns():
     assert players.loc[0, "position"] == "Midfielder"
     assert players.loc[0, "price"] == 14.0
     assert players.loc[0, "value_score"] == 20.0
+    assert players.loc[0, "defensive_contribution_per_90"] == 5.2

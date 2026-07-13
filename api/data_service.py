@@ -10,6 +10,37 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 
+PLAYERS_RANKED_REQUIRED_COLUMNS = [
+    "player_name",
+    "team_name",
+    "position",
+    "price",
+    "points_per_game",
+    "form",
+    "minutes_security",
+    "value_score",
+    "captain_score",
+    "transfer_score",
+    "defensive_contribution_per_90",
+]
+
+PLAYERS_RANKED_NUMERIC_COLUMNS = [
+    "price",
+    "total_points",
+    "points_per_game",
+    "form",
+    "minutes",
+    "selected_by_percent",
+    "value_score",
+    "minutes_security",
+    "ownership_risk",
+    "captain_score",
+    "transfer_score",
+    "defensive_contribution",
+    "defensive_contribution_per_90",
+    "defensive_contribution_per_90_norm",
+]
+
 DATA_FILES = {
     "players": "players_ranked.csv",
     "backtest_predictions": "step6_backtest_predictions.csv",

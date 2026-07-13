@@ -5,6 +5,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
 from api import data_service
+from api.player_signals import add_safety_tiers
 
 router = APIRouter(prefix="/api/players", tags=["players"])
 
@@ -24,21 +25,12 @@ PLAYER_COLUMN_MAP = {
     "captain_score": "captain_score",
     "transfer_score": "transfer_score",
     "selected_by_percent": "selected_by_percent",
+    "defensive_contribution": "defensive_contribution",
+    "defensive_contribution_per_90": "defensive_contribution_per_90",
+    "safety_tier": "safety_tier",
 }
 
-NUMERIC_COLUMNS = [
-    "price",
-    "total_points",
-    "points_per_game",
-    "form",
-    "minutes",
-    "selected_by_percent",
-    "value_score",
-    "minutes_security",
-    "ownership_risk",
-    "captain_score",
-    "transfer_score",
-]
+NUMERIC_COLUMNS = data_service.PLAYERS_RANKED_NUMERIC_COLUMNS
 
 RECENT_FORM_WINDOW = 3
 
@@ -51,6 +43,16 @@ def _load_players() -> tuple[Any, list[str]]:
     dataframe = _add_element_ids(dataframe)
     dataframe = _add_team_codes(dataframe)
 
+    for column in NUMERIC_COLUMNS:
+        if column in dataframe.columns:
+            dataframe[column] = pd.to_numeric(
+                dataframe[column].astype(str).str.rstrip("%"),
+                errors="coerce",
+            )
+    existing_numeric_columns = [column for column in NUMERIC_COLUMNS if column in dataframe.columns]
+    dataframe[existing_numeric_columns] = dataframe[existing_numeric_columns].fillna(0)
+    dataframe = _add_historical_form_fallback(dataframe)
+    dataframe = add_safety_tiers(dataframe)
     available_columns = list(dataframe.columns)
     missing = [column for column in PLAYER_COLUMN_MAP if column not in dataframe.columns]
     if missing:
@@ -62,16 +64,6 @@ def _load_players() -> tuple[Any, list[str]]:
                 "available_columns": available_columns,
             },
         )
-
-    for column in NUMERIC_COLUMNS:
-        if column in dataframe.columns:
-            dataframe[column] = pd.to_numeric(
-                dataframe[column].astype(str).str.rstrip("%"),
-                errors="coerce",
-            )
-    existing_numeric_columns = [column for column in NUMERIC_COLUMNS if column in dataframe.columns]
-    dataframe[existing_numeric_columns] = dataframe[existing_numeric_columns].fillna(0)
-    dataframe = _add_historical_form_fallback(dataframe)
     return dataframe, available_columns
 
 

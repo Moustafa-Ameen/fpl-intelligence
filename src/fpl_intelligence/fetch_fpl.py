@@ -40,6 +40,13 @@ COLUMN_EXPLANATIONS = {
     "minutes": "Total Premier League minutes played in the current dataset.",
     "selected_by_percent": "Percentage of FPL managers currently owning the player.",
     "value_score": "Simple value metric: total_points divided by current price.",
+    "defensive_contribution": (
+        "Season-total FPL points awarded for meeting the defensive contribution threshold."
+    ),
+    "defensive_contribution_per_90": (
+        "Defensive actions per 90 minutes: clearances, blocks, interceptions, tackles, and "
+        "recoveries combined under the current FPL Defensive Contributions rule."
+    ),
 }
 
 
@@ -108,6 +115,11 @@ def load_players(bootstrap_data: dict[str, Any]) -> pd.DataFrame:
     players["points_per_game"] = pd.to_numeric(players["points_per_game"], errors="coerce")
     players["form"] = pd.to_numeric(players["form"], errors="coerce")
     players["selected_by_percent"] = pd.to_numeric(players["selected_by_percent"], errors="coerce")
+    for column in ["defensive_contribution", "defensive_contribution_per_90"]:
+        if column in players:
+            players[column] = pd.to_numeric(players[column], errors="coerce").fillna(0.0)
+        else:
+            players[column] = 0.0
     players["value_score"] = players["total_points"] / players["price"]
 
     columns = list(COLUMN_EXPLANATIONS)
