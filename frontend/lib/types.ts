@@ -94,6 +94,43 @@ export interface FixtureTick {
   }[];
 }
 
+export interface ComparisonFixture {
+  gw: number;
+  opponent: string;
+  home: boolean;
+  difficulty: number;
+}
+
+export interface ComparisonPlayer {
+  element_id: number;
+  name: string;
+  web_name?: string;
+  team: string;
+  position: string;
+  price: number | null;
+  points_per_game: number | null;
+  form: number | null;
+  captain_score: number | null;
+  transfer_score: number | null;
+  minutes_security: number | null;
+  defensive_contribution_per_90: number | null;
+  selected_by_percent: number | null;
+  team_code?: number | null;
+  fixtures: ComparisonFixture[];
+  average_fixture_difficulty: number | null;
+  live_metrics_available: boolean;
+  live_metrics_unavailable_reason: string | null;
+}
+
+export interface PlayerComparisonResponse {
+  players: ComparisonPlayer[];
+  season_state: SeasonStateCode;
+  fpl_api_season?: string;
+  fixture_source: string;
+  fixture_season: string;
+  difficulty_source: string;
+}
+
 export interface PlayerHistoryPoint {
   element_id?: number | null;
   gw: number;

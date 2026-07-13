@@ -5,6 +5,7 @@ import type {
   Fixture,
   FixtureTick,
   Player,
+  PlayerComparisonResponse,
   PlayerHistoryPoint,
   PlannerResponse,
   SeasonState,
@@ -46,6 +47,11 @@ export async function getPlayers(params?: {
   if (params?.limit) search.set("limit", String(params.limit));
   const suffix = search.toString() ? `?${search}` : "";
   return fetchJson(`/api/players${suffix}`);
+}
+
+export async function comparePlayers(elementIds: number[]): Promise<PlayerComparisonResponse> {
+  const ids = elementIds.slice(0, 3).join(",");
+  return fetchJson(`/api/players/compare?ids=${encodeURIComponent(ids)}`, { cache: "no-store" });
 }
 
 export async function getCaptains(): Promise<CaptainPick[]> {

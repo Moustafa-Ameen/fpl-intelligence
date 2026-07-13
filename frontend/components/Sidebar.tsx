@@ -5,6 +5,7 @@ import {
   CalendarDays,
   CalendarRange,
   Crown,
+  GitCompare,
   Edit2,
   Home,
   Settings,
@@ -42,6 +43,7 @@ const navGroups = [
     label: "Insights",
     items: [
       { href: "/stats", label: "All Players", icon: Users },
+      { href: "/compare", label: "Compare Players", icon: GitCompare },
       { href: "/proof", label: "Proof It Works", icon: BarChart3 },
       { href: "/settings", label: "Settings", icon: Settings },
     ],

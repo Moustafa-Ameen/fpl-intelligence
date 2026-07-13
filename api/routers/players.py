@@ -4,8 +4,10 @@ from typing import Any
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
-from api import data_service
+from api import data_service, fpl_client
 from api.player_signals import add_safety_tiers
+from api.routers.fixtures import fixture_source_state, ticker
+from api.routers.fpl_live import _detect_season_state
 
 router = APIRouter(prefix="/api/players", tags=["players"])
 
@@ -278,6 +280,134 @@ def differentials() -> list[dict[str, Any]]:
     return data_service.to_records(output)
 
 
+@router.get("/compare")
+async def compare_players(
+    ids: str = Query(..., description="Comma-separated FPL element IDs"),
+) -> dict[str, Any]:
+    requested_ids = _parse_comparison_ids(ids)
+    dataframe, _ = _load_players()
+    if dataframe.empty:
+        return {"players": [], "season_state": "season_ended_no_next_data"}
+
+    numeric_ids = pd.to_numeric(dataframe["element_id"], errors="coerce")
+    selected = dataframe[numeric_ids.isin(requested_ids)].copy()
+    found_ids = {int(value) for value in selected["element_id"].dropna()}
+    missing_ids = [element_id for element_id in requested_ids if element_id not in found_ids]
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "One or more player IDs were not found.",
+                "missing_ids": missing_ids,
+            },
+        )
+
+    bootstrap = await fpl_client.get_bootstrap()
+    fixture_state = await fixture_source_state()
+    season_state = _detect_season_state(bootstrap, fixture_state)
+    live_metrics_available = season_state == "in_season"
+
+    try:
+        ticker_rows = await ticker(range=5)
+    except HTTPException:
+        ticker_rows = []
+    fixture_by_team = {
+        str(row.get("team_short")): row
+        for row in ticker_rows
+        if row.get("team_short")
+    }
+    fixture_by_name = {
+        str(row.get("team")): row
+        for row in ticker_rows
+        if row.get("team")
+    }
+    team_short_by_code = {
+        int(team["code"]): team.get("short_name")
+        for team in bootstrap.get("teams", [])
+        if team.get("code") is not None and team.get("short_name")
+    }
+    if not team_short_by_code:
+        static_teams = data_service.bootstrap_static().get("teams", [])
+        team_short_by_code = {
+            int(team["code"]): team.get("short_name")
+            for team in static_teams
+            if team.get("code") is not None and team.get("short_name")
+        }
+
+    output = _plain_player_columns(selected)
+    comparison_players = []
+    for _, row in output.iterrows():
+        team_name = str(row.get("team"))
+        team_code = _comparison_int(row.get("team_code"))
+        team_short = team_short_by_code.get(team_code) if team_code is not None else None
+        fixture_row = (
+            fixture_by_team.get(team_short)
+            or fixture_by_name.get(team_name)
+        )
+        next_fixtures = (fixture_row or {}).get("fixtures", [])[:5]
+        difficulty_values = [
+            float(fixture.get("difficulty"))
+            for fixture in next_fixtures
+            if fixture.get("difficulty") is not None
+        ]
+        average_difficulty = (
+            round(sum(difficulty_values) / len(difficulty_values), 2)
+            if difficulty_values
+            else None
+        )
+
+        comparison_players.append(
+            {
+                "element_id": int(row["element_id"]),
+                "name": row.get("name"),
+                "web_name": row.get("web_name"),
+                "team": row.get("team"),
+                "position": row.get("position"),
+                "price": _comparison_number(row.get("price")),
+                "points_per_game": _comparison_number(row.get("ppg")),
+                "form": _comparison_number(row.get("form")) if live_metrics_available else None,
+                "captain_score": (
+                    _comparison_number(row.get("captain_score"))
+                    if live_metrics_available
+                    else None
+                ),
+                "transfer_score": (
+                    _comparison_number(row.get("transfer_score"))
+                    if live_metrics_available
+                    else None
+                ),
+                "minutes_security": (
+                    _comparison_number(row.get("start_likelihood"))
+                    if live_metrics_available
+                    else None
+                ),
+                "defensive_contribution_per_90": _comparison_number(
+                    row.get("defensive_contribution_per_90")
+                ),
+                "selected_by_percent": _comparison_number(row.get("selected_by_percent")),
+                "team_code": _comparison_int(row.get("team_code")),
+                "fixtures": next_fixtures,
+                "average_fixture_difficulty": average_difficulty,
+                "live_metrics_available": live_metrics_available,
+                "live_metrics_unavailable_reason": (
+                    None
+                    if live_metrics_available
+                    else "Unavailable until the new FPL season starts."
+                ),
+            }
+        )
+
+    players_by_id = {player["element_id"]: player for player in comparison_players}
+    return {
+        "players": [players_by_id[element_id] for element_id in requested_ids],
+        "season_state": season_state,
+        "fpl_api_season": _season_label_from_fixture_state(bootstrap),
+        "fixture_source": fixture_state.get("source", "Fixture data unavailable"),
+        "fixture_season": fixture_state.get("season", "unknown"),
+        "difficulty_source": fixture_state.get("difficulty_source", "unknown"),
+    }
+
+
 @router.get("/{name}/history")
 def player_history(name: str) -> list[dict[str, Any]]:
     history = data_service.historical_player_gw()
@@ -297,3 +427,38 @@ def player_history(name: str) -> list[dict[str, Any]]:
     output = output.rename(columns={"player_id": "element_id"})
     columns = ["element_id", "gw", "price", "total_points", "minutes", "selected_by_percent"]
     return data_service.to_records(output[columns])
+
+
+def _parse_comparison_ids(value: str) -> list[int]:
+    try:
+        parsed = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="ids must be comma-separated integers") from exc
+
+    if not parsed or len(parsed) > 3 or len(set(parsed)) != len(parsed):
+        raise HTTPException(status_code=400, detail="Compare between 1 and 3 unique player IDs")
+    return parsed
+
+
+def _comparison_number(value: Any) -> float | None:
+    if value in (None, "") or pd.isna(value):
+        return None
+    return round(float(value), 2)
+
+
+def _comparison_int(value: Any) -> int | None:
+    if value in (None, "") or pd.isna(value):
+        return None
+    return int(value)
+
+
+def _season_label_from_fixture_state(bootstrap: dict[str, Any]) -> str:
+    deadlines = [
+        event.get("deadline_time")
+        for event in bootstrap.get("events", [])
+        if event.get("deadline_time")
+    ]
+    if not deadlines:
+        return "unknown"
+    year = int(str(min(deadlines))[:4])
+    return f"{year}-{str(year + 1)[-2:]}"

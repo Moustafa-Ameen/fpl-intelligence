@@ -53,6 +53,175 @@ def test_transfers_includes_rotation_risk_boolean():
     assert "safety_tier" in transfers[0]
 
 
+def test_player_comparison_returns_selected_players_and_fixture_average(monkeypatch):
+    ranked_players = pd.DataFrame(
+        [
+            {
+                "element_id": 1,
+                "player_name": "Example Forward",
+                "web_name": "Example",
+                "team_name": "Arsenal",
+                "position": "Forward",
+                "team_code": 3,
+                "price": 8.0,
+                "total_points": 100,
+                "points_per_game": 5.2,
+                "form": 6.0,
+                "minutes_security": 0.9,
+                "value_score": 10.0,
+                "captain_score": 6.4,
+                "transfer_score": 0.7,
+                "selected_by_percent": 12.0,
+                "defensive_contribution": 4,
+                "defensive_contribution_per_90": 1.4,
+            },
+            {
+                "element_id": 2,
+                "player_name": "Example Midfielder",
+                "web_name": "Example Mid",
+                "team_name": "Chelsea",
+                "position": "Midfielder",
+                "team_code": 8,
+                "price": 7.0,
+                "total_points": 90,
+                "points_per_game": 4.8,
+                "form": 5.0,
+                "minutes_security": 0.8,
+                "value_score": 9.0,
+                "captain_score": 5.8,
+                "transfer_score": 0.6,
+                "selected_by_percent": 9.0,
+                "defensive_contribution": 7,
+                "defensive_contribution_per_90": 2.1,
+            },
+        ]
+    )
+
+    async def fake_bootstrap():
+        return {"events": [{"id": 1, "is_current": True, "finished": False}]}
+
+    async def fake_fixture_source_state():
+        return {
+            "source": "FPL Fantasy API",
+            "season": "2025-26",
+            "difficulty_source": "Official FPL FDR",
+            "freshness": "live",
+        }
+
+    async def fake_ticker(range: int = 8):  # noqa: A002
+        return [
+            {
+                "team": "Arsenal",
+                "team_short": "ARS",
+                "fixtures": [
+                    {"gw": 1, "opponent": "CHE", "home": True, "difficulty": 2},
+                    {"gw": 2, "opponent": "LIV", "home": False, "difficulty": 4},
+                    {"gw": 3, "opponent": "EVE", "home": True, "difficulty": 3},
+                ],
+            },
+            {
+                "team": "Chelsea",
+                "team_short": "CHE",
+                "fixtures": [
+                    {"gw": 1, "opponent": "FUL", "home": False, "difficulty": 4},
+                    {"gw": 2, "opponent": "BHA", "home": True, "difficulty": 3},
+                ],
+            },
+        ]
+
+    monkeypatch.setattr(players_router, "_load_players", lambda: (ranked_players.copy(), []))
+    monkeypatch.setattr(players_router.fpl_client, "get_bootstrap", fake_bootstrap)
+    monkeypatch.setattr(players_router, "fixture_source_state", fake_fixture_source_state)
+    monkeypatch.setattr(players_router, "ticker", fake_ticker)
+
+    response = asyncio.run(_get("/api/players/compare?ids=1,2"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [player["element_id"] for player in payload["players"]] == [1, 2]
+    assert payload["players"][0]["captain_score"] == 6.4
+    assert payload["players"][0]["defensive_contribution_per_90"] == 1.4
+    assert payload["players"][0]["average_fixture_difficulty"] == 3.0
+    assert payload["players"][1]["average_fixture_difficulty"] == 3.5
+    assert payload["players"][0]["live_metrics_available"] is True
+
+
+def test_player_comparison_nulls_live_metrics_during_season_transition(monkeypatch):
+    ranked_players = pd.DataFrame(
+        [
+            {
+                "element_id": 1,
+                "player_name": "Example Forward",
+                "web_name": "Example",
+                "team_name": "Arsenal",
+                "position": "Forward",
+                "team_code": 3,
+                "price": 8.0,
+                "points_per_game": 5.2,
+                "form": 6.0,
+                "minutes_security": 0.9,
+                "value_score": 10.0,
+                "captain_score": 6.4,
+                "transfer_score": 0.7,
+                "selected_by_percent": 12.0,
+                "defensive_contribution_per_90": 1.4,
+            },
+            {
+                "element_id": 2,
+                "player_name": "Example Midfielder",
+                "web_name": "Example Mid",
+                "team_name": "Chelsea",
+                "position": "Midfielder",
+                "team_code": 8,
+                "price": 7.0,
+                "points_per_game": 4.8,
+                "form": 5.0,
+                "minutes_security": 0.8,
+                "value_score": 9.0,
+                "captain_score": 5.8,
+                "transfer_score": 0.6,
+                "selected_by_percent": 9.0,
+                "defensive_contribution_per_90": 2.1,
+            },
+        ]
+    )
+
+    async def fake_bootstrap():
+        return {"events": [{"id": 38, "finished": True}]}
+
+    async def fake_fixture_source_state():
+        return {
+            "source": "Official PL fixture release",
+            "season": "2026-27",
+            "difficulty_source": "App-estimated difficulty",
+            "freshness": "static official release",
+            "next_kickoff": "2026-08-21T19:00:00Z",
+        }
+
+    async def fake_ticker(range: int = 8):  # noqa: A002
+        return []
+
+    monkeypatch.setattr(players_router, "_load_players", lambda: (ranked_players.copy(), []))
+    monkeypatch.setattr(players_router.fpl_client, "get_bootstrap", fake_bootstrap)
+    monkeypatch.setattr(players_router, "fixture_source_state", fake_fixture_source_state)
+    monkeypatch.setattr(players_router, "ticker", fake_ticker)
+
+    response = asyncio.run(_get("/api/players/compare?ids=1,2"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["season_state"] == "season_ended_preseason"
+    assert payload["fixture_season"] == "2026-27"
+    for player in payload["players"]:
+        assert player["points_per_game"] is not None
+        assert player["form"] is None
+        assert player["captain_score"] is None
+        assert player["transfer_score"] is None
+        assert player["minutes_security"] is None
+        assert player["live_metrics_available"] is False
+        assert "season starts" in player["live_metrics_unavailable_reason"]
+
+
 def test_players_form_falls_back_to_recent_history_when_snapshot_is_zero(monkeypatch):
     ranked_players = pd.DataFrame(
         [
