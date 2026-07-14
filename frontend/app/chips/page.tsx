@@ -1,9 +1,11 @@
 "use client";
 
-import { CalendarClock, CheckCircle2, ChevronDown, Repeat2, RotateCcw, Shield, Sparkles, Zap } from "lucide-react";
+import { AlertTriangle, CalendarClock, CheckCircle2, ChevronDown, Repeat2, RotateCcw, Shield, Sparkles, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
+import { getChipTips } from "@/lib/api";
+import type { ChipTipsResponse } from "@/lib/types";
 
 const chips = [
   {
@@ -83,13 +85,29 @@ const timeline = [
 ];
 
 export default function ChipsPage() {
-  const [teamConnected, setTeamConnected] = useState(false);
   const [openChip, setOpenChip] = useState("Wildcard");
+  const [chipTips, setChipTips] = useState<ChipTipsResponse | null>(null);
+  const teamConnected = Boolean(chipTips && chipTips.status !== "no_team");
 
   useEffect(() => {
-    queueMicrotask(() => {
-      setTeamConnected(Boolean(window.localStorage.getItem("fpl_team_id")));
-    });
+    let active = true;
+    const teamId = window.localStorage.getItem("fpl_team_id") || undefined;
+    getChipTips(teamId)
+      .then((response) => {
+        if (active) setChipTips(response);
+      })
+      .catch(() => {
+        if (active) {
+          setChipTips({
+            status: "unavailable",
+            message: "AI chip tips are temporarily unavailable. Try again shortly.",
+            alerts: [],
+          });
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   return (
@@ -98,6 +116,62 @@ export default function ChipsPage() {
         title="When should I use my chips?"
         subtitle="A calm chip strategy guide for wildcard, free hit, bench boost, and triple captain decisions."
       />
+
+      <Panel>
+        <div className="mb-4 flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-fpl-gold/30 bg-fpl-gold/10 text-fpl-gold">
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-fpl-gold">AI Tip</div>
+            <h2 className="mt-1 text-[18px] font-semibold text-primary">Personalized chip timing</h2>
+            <p className="mt-1 text-[13px] text-secondary">
+              Signals compare this gameweek with your own recent squad baseline.
+            </p>
+          </div>
+        </div>
+        {!chipTips ? (
+          <div className="rounded-lg border border-fpl-border bg-[#161616] p-4 text-sm text-secondary">
+            Checking your squad projections...
+          </div>
+        ) : chipTips.status === "no_team" ? (
+          <div className="rounded-lg border border-fpl-border bg-[#161616] p-4 text-sm text-secondary">
+            Connect your FPL team to receive chip timing tips based on your own squad.
+          </div>
+        ) : chipTips.status === "unavailable" ? (
+          <div className="flex items-start gap-3 rounded-lg border border-fpl-amber/30 bg-fpl-amber/10 p-4 text-sm text-secondary">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-fpl-amber" />
+            <div>{chipTips.message}</div>
+          </div>
+        ) : chipTips.status === "insufficient_data" ? (
+          <div className="rounded-lg border border-fpl-border bg-[#161616] p-4 text-sm text-secondary">
+            {chipTips.message}
+          </div>
+        ) : chipTips.alerts.length ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {chipTips.alerts.map((alert) => (
+              <div key={alert.key} className="rounded-lg border border-fpl-gold/35 bg-fpl-gold/[0.05] p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-semibold text-fpl-gold">{alert.chip}</div>
+                    <p className="mt-2 text-sm leading-6 text-primary">{alert.message}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="font-mono text-lg font-semibold text-fpl-gold">
+                      {alert.strength_percent.toFixed(0)}%
+                    </div>
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">relative signal</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-fpl-green/20 bg-fpl-green/[0.04] p-4 text-sm text-secondary">
+            {chipTips.message}
+          </div>
+        )}
+      </Panel>
 
       <Panel>
         <div className="mb-4">
@@ -200,4 +274,3 @@ export default function ChipsPage() {
     </div>
   );
 }
-

@@ -2,6 +2,7 @@ import type {
   AccuracyResult,
   BacktestResult,
   CaptainPick,
+  ChipTipsResponse,
   Fixture,
   FixtureTick,
   Player,
@@ -110,6 +111,11 @@ export async function getTeamTransfers(teamId: string): Promise<unknown[]> {
 
 export async function getPlanner(teamId: string, horizon: number): Promise<PlannerResponse> {
   return fetchJson(`/api/predictions/planner?team_id=${encodeURIComponent(teamId)}&horizon=${horizon}`);
+}
+
+export async function getChipTips(teamId?: string): Promise<ChipTipsResponse> {
+  const suffix = teamId ? "?team_id=" + encodeURIComponent(teamId) : "";
+  return fetchJson("/api/chip-tips" + suffix, { cache: "no-store" });
 }
 
 export async function getAccuracy(): Promise<AccuracyResult[]> {

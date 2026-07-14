@@ -247,6 +247,33 @@ export interface PlannerResponse {
   player_pool: PlannerPlayer[];
 }
 
+export type ChipTipsStatus = "no_team" | "unavailable" | "insufficient_data" | "ready";
+
+export interface ChipTipAlert {
+  chip: string;
+  key: string;
+  message: string;
+  strength_percent: number;
+  metrics: Record<string, number | boolean>;
+}
+
+export interface ChipTipsResponse {
+  status: ChipTipsStatus;
+  team_id?: number | null;
+  season_state?: SeasonStateCode;
+  fpl_api_season?: string;
+  fixture_season?: string;
+  difficulty_source?: string;
+  current_gw?: number | null;
+  next_gw?: number | null;
+  target_gameweek?: number;
+  message: string;
+  alerts: ChipTipAlert[];
+  baseline_gameweeks?: number | number[];
+  minimum_baseline_gameweeks?: number;
+  model?: string;
+}
+
 export interface BacktestResult {
   strategy: string;
   total_captain_points: number;

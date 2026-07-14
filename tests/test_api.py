@@ -2,6 +2,7 @@ import asyncio
 
 import pandas as pd
 from api.main import app
+from api.routers import chips as chips_router
 from api.routers import fpl_live
 from api.routers import planner as planner_router
 from api.routers import players as players_router
@@ -650,6 +651,46 @@ def test_planner_returns_transition_state_without_projecting(monkeypatch):
     assert payload["fixture_season"] == "2026-27"
     assert payload["next_season_start"] == "2026-08-21T19:00:00Z"
     assert "baseline" not in payload
+
+
+def test_chip_tips_returns_clear_no_team_state():
+    response = asyncio.run(_get("/api/chip-tips"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "no_team"
+    assert response.json()["alerts"] == []
+
+
+def test_chip_tips_returns_transition_state_without_projection(monkeypatch):
+    async def fake_bootstrap():
+        return {
+            "events": [{"id": 38, "finished": True, "deadline_time": "2025-08-15T17:30:00Z"}],
+        }
+
+    async def fake_fixtures():
+        return []
+
+    async def fake_fixture_source_state(fixture_rows=None):
+        return {
+            "source": "Official PL fixture release",
+            "season": "2026-27",
+            "difficulty_source": "App-estimated difficulty",
+            "freshness": "static official release",
+            "next_kickoff": "2026-08-21T19:00:00Z",
+        }
+
+    monkeypatch.setattr(chips_router.fpl_client, "get_bootstrap", fake_bootstrap)
+    monkeypatch.setattr(chips_router.fpl_client, "get_fixtures", fake_fixtures)
+    monkeypatch.setattr(chips_router, "fixture_source_state", fake_fixture_source_state)
+
+    response = asyncio.run(_get("/api/chip-tips?team_id=10"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "unavailable"
+    assert payload["season_state"] == "season_ended_preseason"
+    assert payload["alerts"] == []
+    assert "season" in payload["message"].lower()
 
 
 def test_backtest_accuracy_uses_plain_english_model_names():
