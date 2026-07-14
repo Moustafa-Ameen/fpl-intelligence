@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from api import data_service, fpl_client
+from api.chip_tracking import build_chip_status
 from api.routers.fixtures import fixture_source_state
 from api.routers.predictions import BEST_MODEL
 
@@ -164,6 +165,48 @@ async def squad(team_id: int, gw: int = Query(..., ge=1, le=38)) -> list[dict[st
 @router.get("/team/{team_id}/history")
 async def team_history(team_id: int) -> dict[str, Any]:
     return await fpl_client.get_team_history(team_id)
+
+
+@router.get("/team/{team_id}/chips")
+async def team_chips(team_id: int) -> dict[str, Any]:
+    bootstrap = await fpl_client.get_bootstrap()
+    fixture_rows = await fpl_client.get_fixtures()
+    fixture_state = await fixture_source_state(fixture_rows)
+    season_state = _detect_season_state(bootstrap, fixture_state)
+    history = (
+        await fpl_client.get_team_history(team_id)
+        if season_state == "in_season"
+        else None
+    )
+    current_gameweek = (
+        _next_gameweek_from_bootstrap(bootstrap)
+        or _current_gameweek_from_bootstrap(bootstrap)
+        or 1
+    )
+    return {
+        **build_chip_status(
+            bootstrap,
+            history,
+            current_gameweek,
+            season_state=season_state,
+        ),
+        "team_id": team_id,
+        "fpl_api_season": _season_label_from_bootstrap(bootstrap),
+        "fixture_season": fixture_state.get("season", "unknown"),
+        "next_season_start": fixture_state.get("next_kickoff"),
+    }
+
+
+@router.get("/chips")
+async def chips(team_id: int | None = Query(default=None)) -> dict[str, Any]:
+    if team_id is None:
+        return {
+            "status": "no_team",
+            "team_id": None,
+            "message": "Connect your FPL team to see live chip availability.",
+            "chips": [],
+        }
+    return await team_chips(team_id)
 
 
 @router.get("/team/{team_id}/transfers")

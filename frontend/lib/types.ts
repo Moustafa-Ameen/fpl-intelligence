@@ -274,6 +274,35 @@ export interface ChipTipsResponse {
   model?: string;
 }
 
+export type ChipAvailabilityStatus = "used" | "available" | "not_yet_available" | "expired";
+
+export interface ChipStatusRow {
+  key: string;
+  chip_type: string;
+  name: string;
+  subtitle: string;
+  definition_id?: number | null;
+  number: number;
+  start_event: number;
+  stop_event: number;
+  status: ChipAvailabilityStatus;
+  used_gameweek?: number | null;
+  available_from?: number | null;
+}
+
+export interface ChipStatusResponse {
+  status: "no_team" | "unavailable" | "ready";
+  team_id?: number | null;
+  season_state?: SeasonStateCode;
+  fpl_api_season?: string;
+  fixture_season?: string;
+  current_gameweek?: number;
+  season_reset?: boolean;
+  next_season_start?: string | null;
+  message: string;
+  chips: ChipStatusRow[];
+}
+
 export interface BacktestResult {
   strategy: string;
   total_captain_points: number;

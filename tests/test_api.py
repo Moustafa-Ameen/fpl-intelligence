@@ -661,6 +661,94 @@ def test_chip_tips_returns_clear_no_team_state():
     assert response.json()["alerts"] == []
 
 
+def test_chip_status_returns_clear_no_team_state():
+    response = asyncio.run(_get("/api/fpl/chips"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "no_team"
+    assert response.json()["chips"] == []
+
+
+def test_chip_status_reads_live_history_and_bootstrap_windows(monkeypatch):
+    async def fake_bootstrap():
+        return {
+            "events": [{"id": 5, "is_current": True, "finished": False}],
+            "chips": [
+                {"id": 1, "name": "wildcard", "start_event": 2, "stop_event": 19},
+                {"id": 2, "name": "wildcard", "start_event": 20, "stop_event": 38},
+                {"id": 3, "name": "freehit", "start_event": 2, "stop_event": 19},
+            ],
+        }
+
+    async def fake_fixtures():
+        return []
+
+    async def fake_history(team_id):
+        return {"chips": [{"name": "freehit", "event": 3}]}
+
+    async def fake_fixture_source_state(fixture_rows=None):
+        return {
+            "source": "FPL Fantasy API",
+            "season": "2025-26",
+            "difficulty_source": "Official FPL FDR",
+            "freshness": "live",
+            "next_kickoff": None,
+        }
+
+    monkeypatch.setattr(fpl_live.fpl_client, "get_bootstrap", fake_bootstrap)
+    monkeypatch.setattr(fpl_live.fpl_client, "get_fixtures", fake_fixtures)
+    monkeypatch.setattr(fpl_live.fpl_client, "get_team_history", fake_history)
+    monkeypatch.setattr(fpl_live, "fixture_source_state", fake_fixture_source_state)
+
+    response = asyncio.run(_get("/api/fpl/team/10/chips"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    by_key = {row["key"]: row for row in payload["chips"]}
+    assert payload["status"] == "ready"
+    assert by_key["freehit-1"]["status"] == "used"
+    assert by_key["wildcard-2"]["status"] == "not_yet_available"
+
+
+def test_chip_status_resets_previous_usage_in_preseason(monkeypatch):
+    async def fake_bootstrap():
+        return {
+            "events": [{"id": 38, "finished": True}],
+            "chips": [
+                {"id": 1, "name": "wildcard", "start_event": 2, "stop_event": 19},
+                {"id": 2, "name": "wildcard", "start_event": 20, "stop_event": 38},
+            ],
+        }
+
+    async def fake_fixtures():
+        return []
+
+    async def fake_fixture_source_state(fixture_rows=None):
+        return {
+            "source": "Official PL fixture release",
+            "season": "2026-27",
+            "difficulty_source": "App-estimated difficulty",
+            "freshness": "static official release",
+            "next_kickoff": "2026-08-21T19:00:00Z",
+        }
+
+    async def fail_if_history_called(team_id):
+        raise AssertionError("previous-season chip history must not be read in preseason")
+
+    monkeypatch.setattr(fpl_live.fpl_client, "get_bootstrap", fake_bootstrap)
+    monkeypatch.setattr(fpl_live.fpl_client, "get_fixtures", fake_fixtures)
+    monkeypatch.setattr(fpl_live.fpl_client, "get_team_history", fail_if_history_called)
+    monkeypatch.setattr(fpl_live, "fixture_source_state", fake_fixture_source_state)
+
+    response = asyncio.run(_get("/api/fpl/team/10/chips"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["season_state"] == "season_ended_preseason"
+    assert payload["season_reset"] is True
+    assert all(row["status"] != "used" for row in payload["chips"])
+
+
 def test_chip_tips_returns_transition_state_without_projection(monkeypatch):
     async def fake_bootstrap():
         return {

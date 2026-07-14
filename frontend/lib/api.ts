@@ -2,6 +2,7 @@ import type {
   AccuracyResult,
   BacktestResult,
   CaptainPick,
+  ChipStatusResponse,
   ChipTipsResponse,
   Fixture,
   FixtureTick,
@@ -116,6 +117,17 @@ export async function getPlanner(teamId: string, horizon: number): Promise<Plann
 export async function getChipTips(teamId?: string): Promise<ChipTipsResponse> {
   const suffix = teamId ? "?team_id=" + encodeURIComponent(teamId) : "";
   return fetchJson("/api/chip-tips" + suffix, { cache: "no-store" });
+}
+
+export async function getChipStatuses(teamId?: string): Promise<ChipStatusResponse> {
+  if (!teamId) {
+    return {
+      status: "no_team",
+      message: "Connect your FPL team to see live chip availability.",
+      chips: [],
+    };
+  }
+  return fetchJson(`/api/fpl/team/${encodeURIComponent(teamId)}/chips`, { cache: "no-store" });
 }
 
 export async function getAccuracy(): Promise<AccuracyResult[]> {

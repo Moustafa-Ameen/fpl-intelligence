@@ -1,13 +1,25 @@
 "use client";
 
 import { AlertTriangle, CalendarClock, CheckCircle2, ChevronDown, Repeat2, RotateCcw, Shield, Sparkles, Zap } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Panel } from "@/components/Panel";
 import { SectionHeader } from "@/components/SectionHeader";
-import { getChipTips } from "@/lib/api";
-import type { ChipTipsResponse } from "@/lib/types";
+import { getChipStatuses, getChipTips } from "@/lib/api";
+import type { ChipAvailabilityStatus, ChipStatusRow, ChipTipsResponse } from "@/lib/types";
 
-const chips = [
+type ChipCard = {
+  key: string;
+  name: string;
+  subtitle: string;
+  icon: LucideIcon;
+  tip: string;
+  status?: ChipAvailabilityStatus;
+  usedGameweek?: number | null;
+  availableFrom?: number | null;
+};
+
+const fallbackChips: ChipCard[] = [
   {
     key: "wc1",
     name: "Wildcard 1",
@@ -84,10 +96,49 @@ const timeline = [
   "WC2 late season rebuild",
 ];
 
+const chipCopy = {
+  wildcard: "Best for an early rebuild when fixtures or injuries break your squad.",
+  freehit: "Save for a blank gameweek when many clubs do not play.",
+  bboost: "Only powerful when all 15 squad members are expected to play.",
+  "3xc": "Best on a premium double-gameweek captain with strong minutes.",
+};
+
+function iconForChip(chipType: string): LucideIcon {
+  if (chipType === "freehit") return Zap;
+  if (chipType === "bboost") return Shield;
+  if (chipType === "3xc") return Sparkles;
+  return RotateCcw;
+}
+
+function liveChipCard(chip: ChipStatusRow): ChipCard {
+  return {
+    key: chip.key,
+    name: chip.name,
+    subtitle: chip.subtitle,
+    icon: iconForChip(chip.chip_type),
+    tip: chipCopy[chip.chip_type as keyof typeof chipCopy] ?? "Use this chip when the fixture context supports it.",
+    status: chip.status,
+    usedGameweek: chip.used_gameweek,
+    availableFrom: chip.available_from,
+  };
+}
+
+function chipStatusLabel(chip: ChipCard): string {
+  if (chip.status === "used") return `Used (GW ${chip.usedGameweek})`;
+  if (chip.status === "available") return "Available";
+  if (chip.status === "not_yet_available") return `Available from GW ${chip.availableFrom}`;
+  if (chip.status === "expired") return "Window closed";
+  return "Unknown — connect your team to see chip availability";
+}
+
 export default function ChipsPage() {
   const [openChip, setOpenChip] = useState("Wildcard");
   const [chipTips, setChipTips] = useState<ChipTipsResponse | null>(null);
-  const teamConnected = Boolean(chipTips && chipTips.status !== "no_team");
+  const [chipStatus, setChipStatus] = useState<{
+    status: "no_team" | "unavailable" | "ready";
+    message: string;
+    chips: ChipStatusRow[];
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -105,10 +156,30 @@ export default function ChipsPage() {
           });
         }
       });
+    getChipStatuses(teamId)
+      .then((response) => {
+        if (active) setChipStatus(response);
+      })
+      .catch(() => {
+        if (active) {
+          setChipStatus({
+            status: "unavailable",
+            message: "Live chip availability is temporarily unavailable. Try again shortly.",
+            chips: [],
+          });
+        }
+      });
     return () => {
       active = false;
     };
   }, []);
+
+  const teamConnected = Boolean(
+    (chipStatus && chipStatus.status !== "no_team") ||
+      (chipTips && chipTips.status !== "no_team"),
+  );
+  const liveChips = chipStatus?.status === "ready" ? chipStatus.chips.map(liveChipCard) : [];
+  const chipCards = liveChips.length ? liveChips : fallbackChips;
 
   return (
     <div className="space-y-6">
@@ -177,12 +248,25 @@ export default function ChipsPage() {
         <div className="mb-4">
           <h2 className="text-[18px] font-semibold text-primary">Your chip status</h2>
           <p className="mt-1 text-[13px] text-secondary">
-            FPL chip availability is not exposed in this local data feed, so status is shown as unknown.
+            {chipStatus?.status === "ready"
+              ? `${chipStatus.message} Window dates are read from the current FPL game configuration.`
+              : chipStatus?.status === "unavailable"
+                ? chipStatus.message
+                : teamConnected
+                  ? "Live chip availability is temporarily unavailable."
+                  : "Connect your FPL team to see which chips you have used and which remain available."}
           </p>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {chips.map((chip) => {
+          {chipCards.map((chip) => {
             const Icon = chip.icon;
+            const liveStatus = Boolean(chip.status);
+            const statusClass =
+              chip.status === "available"
+                ? "border-fpl-green/30 bg-fpl-green/10 text-fpl-green"
+                : chip.status === "not_yet_available"
+                  ? "border-fpl-amber/30 bg-fpl-amber/10 text-fpl-amber"
+                  : "border-fpl-border bg-fpl-raised text-muted";
             return (
               <div key={chip.key} className="rounded-lg border border-fpl-border bg-[#161616] p-4">
                 <div className="flex items-start justify-between gap-3">
@@ -192,8 +276,9 @@ export default function ChipsPage() {
                   </div>
                   <Icon className="h-5 w-5 text-fpl-green" />
                 </div>
-                <div className="mt-4 rounded-full border border-fpl-border bg-fpl-raised px-3 py-1 text-[11px] text-muted">
-                  {teamConnected ? "Unknown — check FPL app" : "Unknown — connect your team to see chip availability"}
+                <div className={`mt-4 flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] ${liveStatus ? statusClass : "border-fpl-border bg-fpl-raised text-muted"}`}>
+                  {chip.status === "used" ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}
+                  {chip.status ? chipStatusLabel(chip) : chipStatus ? (chipStatus.status === "unavailable" ? "Live status unavailable" : chipStatusLabel(chip)) : "Checking live status..."}
                 </div>
                 <p className="mt-3 text-xs leading-5 text-secondary">{chip.tip}</p>
               </div>

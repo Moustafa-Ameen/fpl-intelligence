@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 
 from api import data_service, fpl_client
 from api.chip_signals import BASELINE_WINDOW, generate_chip_alerts
+from api.chip_tracking import build_chip_status, filter_actionable_chip_alerts
 from api.routers.fixtures import fixture_source_state
 from api.routers.fpl_live import (
     _current_gameweek_from_bootstrap,
@@ -79,9 +80,10 @@ async def chip_tips(team_id: int | None = Query(default=None)) -> dict[str, Any]
         }
 
     squad_gameweek = max(1, target_gameweek - 1)
-    team_picks, historical_pick_payloads = await asyncio.gather(
+    team_picks, historical_pick_payloads, team_history = await asyncio.gather(
         fpl_client.get_team_picks(team_id, squad_gameweek),
         _historical_picks(team_id, completed_gameweeks),
+        fpl_client.get_team_history(team_id),
     )
 
     try:
@@ -137,6 +139,13 @@ async def chip_tips(team_id: int | None = Query(default=None)) -> dict[str, Any]
         difficulty_by_team_gw,
     )
     signals = generate_chip_alerts(history_rows, target_row)
+    chip_status = build_chip_status(
+        bootstrap,
+        team_history,
+        target_gameweek,
+        season_state=season_state,
+    )
+    signals["alerts"] = filter_actionable_chip_alerts(signals["alerts"], chip_status)
     return {
         **response_meta,
         **signals,
