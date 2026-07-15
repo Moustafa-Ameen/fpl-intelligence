@@ -185,7 +185,7 @@ def _normalise(series: pd.Series) -> pd.Series:
 def build_preseason_scores(
     players: pd.DataFrame,
     season: str = TEST_SEASON,
-    prior_season: str = "2024-25",
+    prior_season: str | None = "2024-25",
 ) -> pd.DataFrame:
     """Build a GW1-only score from the previous season and current GW1 context.
 
@@ -248,7 +248,12 @@ def _choose_cheapest_valid_squad(candidates: pd.DataFrame) -> pd.DataFrame:
     return squad
 
 
-def build_initial_squad(players: pd.DataFrame) -> pd.DataFrame:
+def build_initial_squad(
+    players: pd.DataFrame,
+    season: str = TEST_SEASON,
+    prior_season: str | None = "2024-25",
+    minutes_floor: int | None = MIN_PRESEASON_MINUTES,
+) -> pd.DataFrame:
     """Select a fixed, legal GW1 squad and improve it by one-for-one upgrades.
 
     The 900-minute prior-season floor removes fringe players before the value
@@ -256,8 +261,9 @@ def build_initial_squad(players: pd.DataFrame) -> pd.DataFrame:
     first-team option in the preseason snapshot.
     """
 
-    candidates = build_preseason_scores(players)
-    candidates = candidates[candidates["prior_minutes"] >= MIN_PRESEASON_MINUTES].copy()
+    candidates = build_preseason_scores(players, season=season, prior_season=prior_season)
+    if minutes_floor is not None:
+        candidates = candidates[candidates["prior_minutes"] >= minutes_floor].copy()
     missing_positions = [
         position
         for position, required in POSITION_QUOTAS.items()
