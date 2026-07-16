@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fpl_intelligence.backtest_transfer_strategy import TransferDecision
+from fpl_intelligence.backtest_transfer_strategy import TransferDecision, select_starting_xi
 from fpl_intelligence.season_benchmark import (
     DeterministicTransferStrategy,
     StrategyContext,
@@ -11,6 +11,7 @@ from fpl_intelligence.season_benchmark import (
     append_result_to_history,
     load_historical_player_gameweeks,
     run_season_benchmark,
+    score_gameweek,
 )
 
 
@@ -61,6 +62,73 @@ def test_strategy_interface_applies_hit_cost_and_budget_rule():
     assert decision.made
     assert decision.hit_cost == 4
     assert decision.incoming_price <= decision.outgoing_price + context.bank
+
+
+def test_benchmark_doubles_the_specific_highest_scoring_starter():
+    squad = pd.DataFrame(_squad_rows())
+    projections = {int(player_id): 1.0 for player_id in squad["player_id"]}
+    lineup = select_starting_xi(squad, projections)
+    starter_points = [2, 4, 6, 8, 10, 3, 5, 7, 9, 1, 6]
+    points = dict(zip(lineup.starting_ids, starter_points, strict=True))
+    target = squad[["player_id"]].copy()
+    target["minutes"] = 90
+    target["next_gameweek_points"] = target["player_id"].map(points).fillna(0)
+
+    score = score_gameweek(squad, target, projections)
+
+    assert score.captain_id == lineup.starting_ids[4]
+    assert score.raw_starter_points == sum(starter_points)
+    assert score.points == 71
+
+
+def test_benchmark_excludes_deliberately_high_bench_points():
+    squad = pd.DataFrame(_squad_rows())
+    projections = {int(player_id): 1.0 for player_id in squad["player_id"]}
+    lineup = select_starting_xi(squad, projections)
+    starter_points = list(range(1, 12))
+    bench_points = [15, 16, 17, 18]
+    points = dict(zip(lineup.starting_ids, starter_points, strict=True))
+    points.update(zip(lineup.bench_ids, bench_points, strict=True))
+    target = squad[["player_id"]].copy()
+    target["minutes"] = 90
+    target["next_gameweek_points"] = target["player_id"].map(points)
+
+    score = score_gameweek(squad, target, projections)
+
+    expected_starter_total = sum(starter_points)
+    assert score.raw_starter_points == expected_starter_total
+    assert score.points == expected_starter_total + max(starter_points)
+    assert score.points < expected_starter_total + sum(bench_points)
+
+
+def test_benchmark_autosubs_an_eligible_playing_bench_player():
+    squad = pd.DataFrame(_squad_rows())
+    projections = {int(player_id): 1.0 for player_id in squad["player_id"]}
+    lineup = select_starting_xi(squad, projections)
+    starting_goalkeeper = next(
+        player_id
+        for player_id in lineup.starting_ids
+        if squad.loc[squad["player_id"] == player_id, "position"].iloc[0] == "GK"
+    )
+    bench_goalkeeper = next(
+        player_id
+        for player_id in lineup.bench_ids
+        if squad.loc[squad["player_id"] == player_id, "position"].iloc[0] == "GK"
+    )
+    target = squad[["player_id"]].copy()
+    target["minutes"] = 90
+    target["next_gameweek_points"] = 1
+    target.loc[target["player_id"] == starting_goalkeeper, "minutes"] = 0
+    target.loc[target["player_id"] == starting_goalkeeper, "next_gameweek_points"] = 0
+    target.loc[target["player_id"] == bench_goalkeeper, "next_gameweek_points"] = 7
+
+    score = score_gameweek(squad, target, projections)
+
+    assert score.autosub_ids == (bench_goalkeeper,)
+    assert bench_goalkeeper in score.starting_ids
+    assert starting_goalkeeper not in score.starting_ids
+    assert score.raw_starter_points == 17
+    assert score.points == 24
 
 
 def test_no_transfer_strategy_runs_a_complete_historical_season(tmp_path: Path):
