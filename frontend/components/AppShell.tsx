@@ -6,18 +6,19 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { DrawerProvider } from "@/context/DrawerContext";
 import { LiveMatchBar } from "./LiveMatchBar";
+import { LogoLoader } from "./LogoLoader";
 import { PlayerDrawer } from "./PlayerDrawer";
 import { Sidebar } from "./Sidebar";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [progressState, setProgressState] = useState<"idle" | "loading" | "done">("idle");
+  const [progressState, setProgressState] = useState<"idle" | "loading" | "done">("loading");
   const pathname = usePathname();
 
   useEffect(() => {
     queueMicrotask(() => setProgressState("loading"));
-    const doneTimer = window.setTimeout(() => setProgressState("done"), 650);
-    const idleTimer = window.setTimeout(() => setProgressState("idle"), 900);
+    const doneTimer = window.setTimeout(() => setProgressState("done"), 5000);
+    const idleTimer = window.setTimeout(() => setProgressState("idle"), 5600);
     return () => {
       window.clearTimeout(doneTimer);
       window.clearTimeout(idleTimer);
@@ -26,13 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <DrawerProvider>
-      {progressState !== "idle" ? (
-        <div
-          className={`fixed left-0 top-0 z-[100] h-0.5 bg-fpl-green ${
-            progressState === "loading" ? "route-progress" : "route-progress-done"
-          }`}
-        />
-      ) : null}
+      {progressState !== "idle" ? <LogoLoader complete={progressState === "done"} /> : null}
       <button
         type="button"
         onClick={() => setMobileOpen(true)}

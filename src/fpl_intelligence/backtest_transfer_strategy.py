@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
+from fpl_intelligence.squad_optimizer import optimize_squad, optimize_starting_xi
 from fpl_intelligence.step4_models import (
     FEATURE_COLUMNS,
     TEST_SEASON,
@@ -41,6 +42,7 @@ INITIAL_BUDGET = 100.0
 MAX_PLAYERS_PER_TEAM = 3
 FREE_TRANSFER_CAP = 4
 DEFAULT_GAIN_THRESHOLD = 2.0
+LOOKAHEAD_DECISION_THRESHOLD = 1.0
 MIN_PRESEASON_MINUTES = 900
 POSITION_QUOTAS = {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
 POSITION_ORDER = tuple(POSITION_QUOTAS)
@@ -191,7 +193,9 @@ def build_preseason_scores(
 
     Prior-season output and points-per-price provide the main signal. Current GW1
     ownership is only a fallback context signal, so players without prior-season
-    rows can still enter the deterministic candidate pool.
+    rows can still enter the deterministic candidate pool. This remains a known
+    weak-GW1 limitation of the benchmark rather than a production model feature;
+    the roadmap schedules its replacement for Phase M3.5's lightweight optimizer.
     """
 
     gw1 = players[(players["season"] == season) & (players["gameweek"] == 1)].copy()
@@ -254,12 +258,7 @@ def build_initial_squad(
     prior_season: str | None = "2024-25",
     minutes_floor: int | None = MIN_PRESEASON_MINUTES,
 ) -> pd.DataFrame:
-    """Select a fixed, legal GW1 squad and improve it by one-for-one upgrades.
-
-    The 900-minute prior-season floor removes fringe players before the value
-    ranking is used. This is a deliberately simple proxy for being an established
-    first-team option in the preseason snapshot.
-    """
+    """Select the highest-scoring legal GW1 squad with the exact MILP optimizer."""
 
     candidates = build_preseason_scores(players, season=season, prior_season=prior_season)
     if minutes_floor is not None:
@@ -274,43 +273,7 @@ def build_initial_squad(
             "The preseason minutes filter left too few candidates for: "
             + ", ".join(missing_positions)
         )
-    squad = _choose_cheapest_valid_squad(candidates)
-
-    # Starting from a cheap valid squad makes the budget constraint explicit. Repeatedly
-    # apply the best legal same-position upgrade until no better one-for-one move exists.
-    while True:
-        best: tuple[float, int, int, pd.Series] | None = None
-        squad_ids = set(int(value) for value in squad["player_id"])
-        for current_index, current in squad.iterrows():
-            pool = candidates[
-                (candidates["position_group"] == position_group(current["position"]))
-                & (~candidates["player_id"].isin(squad_ids))
-                & (candidates["preseason_value_score"] > current["preseason_value_score"])
-            ]
-            for _, incoming in pool.iterrows():
-                replacement_price = float(squad["price"].sum()) - float(current["price"]) + float(
-                    incoming["price"]
-                )
-                if replacement_price > INITIAL_BUDGET + 1e-9:
-                    continue
-                team_counts = squad.groupby("team")["player_id"].size().to_dict()
-                team_counts[current["team"]] -= 1
-                if team_counts.get(incoming["team"], 0) >= MAX_PLAYERS_PER_TEAM:
-                    continue
-                gain = float(incoming["preseason_value_score"] - current["preseason_value_score"])
-                candidate = (gain, int(incoming["player_id"]), int(current_index), incoming)
-                if best is None or candidate[:3] > best[:3]:
-                    best = candidate
-        if best is None:
-            break
-        _, _, current_index, incoming = best
-        squad.loc[current_index] = incoming
-
-    squad = squad.sort_values(
-        ["position_group", "preseason_value_score", "player_id"],
-        ascending=[True, False, True],
-    )
-    squad = squad.reset_index(drop=True)
+    squad = optimize_squad(candidates, prediction_column="preseason_value_score")
     violations = validate_squad(squad)
     if violations:
         raise ValueError(f"Initial squad is invalid: {'; '.join(violations)}")
@@ -346,15 +309,26 @@ def train_gameweek_predictions(
     target["expected_points_adjusted"] = (
         target["predicted_points"] * target["probability_60_plus_minutes"]
     ).clip(lower=0.0)
+    target["decision_price"] = target["price_before_deadline"].fillna(target["price"])
     return target
 
 
 def _latest_prices(players: pd.DataFrame, gameweek: int) -> dict[int, float]:
+    # GW1 uses the opening snapshot. Before later deadlines, the latest safe
+    # historical price is the previous completed-GW snapshot, not the target GW.
+    cutoff = gameweek if gameweek == 1 else gameweek - 1
     rows = players[
-        (players["season"] == TEST_SEASON) & (players["gameweek"] <= gameweek)
+        (players["season"] == TEST_SEASON) & (players["gameweek"] <= cutoff)
     ].sort_values(["player_id", "gameweek"])
     latest = rows.drop_duplicates("player_id", keep="last")
     return {int(row.player_id): float(row.price) for row in latest.itertuples()}
+
+
+def _decision_price(row: pd.Series) -> float:
+    value = row.get("decision_price")
+    if value is not None and pd.notna(value):
+        return float(value)
+    return float(row["price"])
 
 
 def choose_transfer(
@@ -368,54 +342,232 @@ def choose_transfer(
 
     projection_by_id = predictions.set_index("player_id")["expected_points_adjusted"].to_dict()
     candidates = predictions.copy()
+    if "decision_price" not in candidates:
+        candidates["decision_price"] = np.nan
     candidates["position_group"] = candidates["position"].map(position_group)
     squad_ids = set(int(value) for value in squad["player_id"])
     hit_cost = 0 if free_transfers > 0 else 4
-    options: list[tuple[float, float, int, int, pd.Series]] = []
+    # Convert the small candidate pools once. The previous nested ``iterrows``
+    # implementation rebuilt grouped frames and team counts for every possible
+    # transfer, which made a two-horizon strategy unnecessarily expensive while
+    # producing the same legal options and tie-break order.
+    candidate_columns = [
+        "player_id",
+        "team",
+        "price",
+        "decision_price",
+        "expected_points_adjusted",
+        "player_name",
+    ]
+    candidates_by_position = {
+        group: list(
+            frame[candidate_columns].itertuples(index=False, name=None)
+        )
+        for group, frame in candidates.groupby("position_group", sort=False)
+    }
+    team_counts = squad.groupby("team")["player_id"].size().to_dict()
+    options: list[tuple[float, float, int, int, str, float, str, float]] = []
 
-    for _outgoing_index, outgoing in squad.iterrows():
-        outgoing_id = int(outgoing["player_id"])
+    for outgoing_id_value, outgoing_position, outgoing_team, outgoing_price, outgoing_name in squad[
+        ["player_id", "position", "team", "price", "player_name"]
+    ].itertuples(index=False, name=None):
+        outgoing_id = int(outgoing_id_value)
         outgoing_projection = float(projection_by_id.get(outgoing_id, 0.0))
-        same_position = candidates[
-            candidates["position_group"] == position_group(outgoing["position"])
-        ]
-        for _, incoming in same_position.iterrows():
-            incoming_id = int(incoming["player_id"])
+        same_position = candidates_by_position.get(position_group(outgoing_position), [])
+        remaining_team_counts = dict(team_counts)
+        remaining_team_counts[outgoing_team] = (
+            remaining_team_counts.get(outgoing_team, 0) - 1
+        )
+        for (
+            incoming_id_value,
+            incoming_team,
+            incoming_price_value,
+            decision_price,
+            incoming_projection,
+            incoming_name,
+        ) in same_position:
+            incoming_id = int(incoming_id_value)
             if incoming_id in squad_ids or incoming_id == outgoing_id:
                 continue
-            if float(incoming["price"]) > float(outgoing["price"]) + bank + 1e-9:
+            incoming_price = float(
+                decision_price
+                if decision_price is not None and pd.notna(decision_price)
+                else incoming_price_value
+            )
+            if incoming_price > float(outgoing_price) + bank + 1e-9:
                 continue
-            team_counts = squad.groupby("team")["player_id"].size().to_dict()
-            team_counts[outgoing["team"]] -= 1
-            if team_counts.get(incoming["team"], 0) >= MAX_PLAYERS_PER_TEAM:
+            if remaining_team_counts.get(incoming_team, 0) >= MAX_PLAYERS_PER_TEAM:
                 continue
-            projected_gain = float(incoming["expected_points_adjusted"]) - outgoing_projection
+            projected_gain = float(incoming_projection) - outgoing_projection
             net_gain = projected_gain - hit_cost
             if net_gain <= gain_threshold:
                 continue
             options.append(
-                (net_gain, projected_gain, -incoming_id, -int(outgoing["player_id"]), incoming)
+                (
+                    net_gain,
+                    projected_gain,
+                    -incoming_id,
+                    -outgoing_id,
+                    incoming_name,
+                    incoming_price,
+                    outgoing_name,
+                    float(outgoing_price),
+                )
             )
 
     if not options:
         return TransferDecision(None, None, None, None, 0.0, 0.0, 0, None, None)
 
-    net_gain, projected_gain, neg_incoming_id, neg_outgoing_id, incoming = max(
-        options, key=lambda item: item[:4]
-    )
+    (
+        net_gain,
+        projected_gain,
+        neg_incoming_id,
+        neg_outgoing_id,
+        incoming_name,
+        incoming_price,
+        outgoing_name,
+        outgoing_price,
+    ) = max(options, key=lambda item: item[:4])
     outgoing_id = -neg_outgoing_id
-    outgoing = squad[squad["player_id"] == outgoing_id].iloc[0]
     return TransferDecision(
         outgoing_id=outgoing_id,
         incoming_id=-neg_incoming_id,
-        outgoing_name=str(outgoing["player_name"]),
-        incoming_name=str(incoming["player_name"]),
+        outgoing_name=str(outgoing_name),
+        incoming_name=str(incoming_name),
         projected_gain=projected_gain,
         net_projected_gain=net_gain,
         hit_cost=hit_cost,
-        outgoing_price=float(outgoing["price"]),
-        incoming_price=float(incoming["price"]),
+        outgoing_price=float(outgoing_price),
+        incoming_price=float(incoming_price),
     )
+
+
+def _empty_transfer_decision() -> TransferDecision:
+    return TransferDecision(None, None, None, None, 0.0, 0.0, 0, None, None)
+
+
+def _projected_squad_points(squad: pd.DataFrame, predictions: pd.DataFrame) -> float:
+    """Return projected points for the optimizer-selected XI of a squad."""
+
+    if predictions.empty:
+        return 0.0
+    projections = predictions.set_index("player_id")["expected_points_adjusted"].to_dict()
+    lineup = select_starting_xi(squad, projections)
+    return float(sum(float(projections.get(player_id, 0.0)) for player_id in lineup.starting_ids))
+
+
+def _hypothetical_transfer_squad(
+    squad: pd.DataFrame,
+    predictions: pd.DataFrame,
+    decision: TransferDecision,
+) -> pd.DataFrame:
+    """Apply a transfer to a hypothetical branch without changing live state."""
+
+    if not decision.made:
+        return squad.copy()
+    incoming = predictions[predictions["player_id"] == decision.incoming_id].iloc[0].copy()
+    incoming["price"] = _decision_price(incoming)
+    updated = squad[squad["player_id"] != decision.outgoing_id].copy()
+    updated = pd.concat([updated, pd.DataFrame([incoming])], ignore_index=True)
+    violations = validate_squad(updated, budget=float("inf"))
+    if violations:
+        raise ValueError(
+            "Hypothetical transfer produced an invalid squad: "
+            + "; ".join(violations)
+        )
+    return updated
+
+
+def _projected_branch_delta(
+    before: pd.DataFrame,
+    after: pd.DataFrame,
+    prediction_frames: list[pd.DataFrame],
+) -> float:
+    return float(
+        sum(
+            _projected_squad_points(after, frame)
+            - _projected_squad_points(before, frame)
+            for frame in prediction_frames
+            if not frame.empty
+        )
+    )
+
+
+@dataclass(frozen=True)
+class TwoGameweekLookaheadStrategy:
+    """Compare a transfer-now branch with a one-week bank-and-wait branch."""
+
+    decision_threshold: float = LOOKAHEAD_DECISION_THRESHOLD
+    name: str = "two-gameweek-lookahead"
+    version: str = "m5-lookahead-v1"
+    requires_future_predictions: bool = True
+
+    def decide(self, context: Any) -> TransferDecision:
+        current = context.predictions
+        best_now = choose_transfer(
+            context.squad,
+            current,
+            bank=context.bank,
+            free_transfers=context.free_transfers,
+            gain_threshold=-float("inf"),
+        )
+        if not best_now.made:
+            return _empty_transfer_decision()
+
+        after_now = _hypothetical_transfer_squad(context.squad, current, best_now)
+        future_frames = [
+            context.future_predictions.get(context.gameweek + offset, pd.DataFrame())
+            for offset in (1, 2)
+        ]
+        now_value = (
+            _projected_branch_delta(
+                context.squad,
+                after_now,
+                [current, *future_frames],
+            )
+            - best_now.hit_cost
+        )
+
+        next_predictions = future_frames[0]
+        wait_value = 0.0
+        if not next_predictions.empty:
+            next_free_transfers = min(
+                context.free_transfer_cap, context.free_transfers + 1
+            )
+            best_wait = choose_transfer(
+                context.squad,
+                next_predictions,
+                bank=context.bank,
+                free_transfers=next_free_transfers,
+                gain_threshold=-float("inf"),
+            )
+            if best_wait.made:
+                after_wait = _hypothetical_transfer_squad(
+                    context.squad, next_predictions, best_wait
+                )
+                wait_value = (
+                    _projected_branch_delta(
+                        context.squad,
+                        after_wait,
+                        future_frames,
+                    )
+                    - best_wait.hit_cost
+                )
+
+        if now_value <= 0.0 or now_value - wait_value <= self.decision_threshold:
+            return _empty_transfer_decision()
+
+        return TransferDecision(
+            outgoing_id=best_now.outgoing_id,
+            incoming_id=best_now.incoming_id,
+            outgoing_name=best_now.outgoing_name,
+            incoming_name=best_now.incoming_name,
+            projected_gain=now_value + best_now.hit_cost,
+            net_projected_gain=now_value,
+            hit_cost=best_now.hit_cost,
+            outgoing_price=best_now.outgoing_price,
+            incoming_price=best_now.incoming_price,
+        )
 
 
 def _apply_transfer(
@@ -426,6 +578,8 @@ def _apply_transfer(
     if not decision.made:
         return squad.copy()
     incoming = predictions[predictions["player_id"] == decision.incoming_id].iloc[0]
+    incoming = incoming.copy()
+    incoming["price"] = _decision_price(incoming)
     updated = squad[squad["player_id"] != decision.outgoing_id].copy()
     updated = pd.concat([updated, pd.DataFrame([incoming])], ignore_index=True)
     updated["position_group"] = updated["position"].map(position_group)
@@ -439,51 +593,9 @@ def select_starting_xi(
     squad: pd.DataFrame,
     projected_points: dict[int, float],
 ) -> LineupSelection:
-    """Choose the highest-projected legal formation and order its bench."""
-
-    working = squad.copy()
-    working["position_group"] = working["position"].map(position_group)
-    working["_projection"] = (
-        working["player_id"].map(projected_points).fillna(0.0).astype(float)
-    )
-    best_selection: tuple[float, tuple[int, ...], tuple[int, int, int]] | None = None
-
-    for formation in VALID_FORMATIONS:
-        selected: list[int] = []
-        feasible = True
-        for position, count in zip(("GK", "DEF", "MID", "FWD"), (1, *formation), strict=True):
-            pool = working[working["position_group"] == position].sort_values(
-                ["_projection", "player_id"], ascending=[False, True]
-            )
-            if len(pool) < count:
-                feasible = False
-                break
-            selected.extend(int(value) for value in pool.head(count)["player_id"])
-        if not feasible:
-            continue
-        projection_sum = float(working[working["player_id"].isin(selected)]["_projection"].sum())
-        selection_key = (projection_sum, tuple(-player_id for player_id in selected), formation)
-        if best_selection is None or selection_key > best_selection:
-            best_selection = selection_key
-
-    if best_selection is None:
-        raise ValueError("Could not construct a legal starting XI from the squad")
-
-    _, selected_key, formation = best_selection
-    starting_ids = tuple(-player_id for player_id in selected_key)
-    starting_set = set(starting_ids)
-    bench = working[~working["player_id"].isin(starting_set)].copy()
-    bench_gk = bench[bench["position_group"] == "GK"].sort_values(
-        ["_projection", "player_id"], ascending=[False, True]
-    )
-    bench_outfield = bench[bench["position_group"] != "GK"].sort_values(
-        ["_projection", "player_id"], ascending=[False, True]
-    )
-    bench_ids = tuple(
-        [int(value) for value in bench_gk["player_id"]]
-        + [int(value) for value in bench_outfield["player_id"]]
-    )
-    return LineupSelection(starting_ids, bench_ids, _formation_name(formation))
+    """Choose the optimizer's highest-projected legal formation and bench."""
+    lineup = optimize_starting_xi(squad, projected_points)
+    return LineupSelection(lineup.starting_ids, lineup.bench_ids, lineup.formation)
 
 
 def score_gameweek(
@@ -495,8 +607,39 @@ def score_gameweek(
 
     lineup = select_starting_xi(squad, projected_points)
     target_rows = target.drop_duplicates("player_id").set_index("player_id")
-    minutes = target_rows["minutes"].to_dict()
     points = target_rows["next_gameweek_points"].to_dict()
+    active_ids, autosub_ids = resolve_active_lineup(squad, target, lineup)
+
+    captain_id = max(
+        active_ids,
+        key=lambda player_id: (
+            float(points.get(player_id, 0)),
+            float(projected_points.get(player_id, 0)),
+            -player_id,
+        ),
+    )
+    raw_starter_points = float(sum(float(points.get(player_id, 0)) for player_id in active_ids))
+    total_points = raw_starter_points + float(points.get(captain_id, 0))
+    return GameweekScore(
+        points=total_points,
+        raw_starter_points=raw_starter_points,
+        captain_id=captain_id,
+        starting_ids=tuple(active_ids),
+        bench_ids=lineup.bench_ids,
+        autosub_ids=tuple(autosub_ids),
+        formation=lineup.formation,
+    )
+
+
+def resolve_active_lineup(
+    squad: pd.DataFrame,
+    target: pd.DataFrame,
+    lineup: LineupSelection,
+) -> tuple[list[int], tuple[int, ...]]:
+    """Apply the benchmark's actual-minutes autosub rules to a lineup."""
+
+    target_rows = target.drop_duplicates("player_id").set_index("player_id")
+    minutes = target_rows["minutes"].to_dict()
     positions = {
         int(row.player_id): position_group(row.position) for row in squad.itertuples()
     }
@@ -528,25 +671,7 @@ def score_gameweek(
             autosub_ids.append(bench_id)
             break
 
-    captain_id = max(
-        active_ids,
-        key=lambda player_id: (
-            float(points.get(player_id, 0)),
-            float(projected_points.get(player_id, 0)),
-            -player_id,
-        ),
-    )
-    raw_starter_points = float(sum(float(points.get(player_id, 0)) for player_id in active_ids))
-    total_points = raw_starter_points + float(points.get(captain_id, 0))
-    return GameweekScore(
-        points=total_points,
-        raw_starter_points=raw_starter_points,
-        captain_id=captain_id,
-        starting_ids=tuple(active_ids),
-        bench_ids=lineup.bench_ids,
-        autosub_ids=tuple(autosub_ids),
-        formation=lineup.formation,
-    )
+    return active_ids, tuple(autosub_ids)
 
 
 def run_transfer_strategy_backtest(

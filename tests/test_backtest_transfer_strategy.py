@@ -1,12 +1,14 @@
 import pandas as pd
 
 from fpl_intelligence.backtest_transfer_strategy import (
+    TwoGameweekLookaheadStrategy,
     build_initial_squad,
     choose_transfer,
     score_gameweek,
     select_starting_xi,
     validate_squad,
 )
+from fpl_intelligence.season_benchmark import StrategyContext
 from fpl_intelligence.step4_models import load_historical_player_gameweeks
 
 
@@ -26,6 +28,72 @@ def _squad_rows() -> list[dict[str, object]]:
             )
             player_id += 1
     return rows
+
+
+def _lookahead_context(future_player_101_points: float) -> StrategyContext:
+    squad = pd.DataFrame(_squad_rows())
+    current = squad.copy()
+    current["expected_points_adjusted"] = 1.0
+    current["decision_price"] = 5.0
+    current = pd.concat(
+        [
+            current,
+            pd.DataFrame(
+                [
+                    {
+                        "player_id": 100,
+                        "player_name": "Immediate Upgrade",
+                        "position": "MID",
+                        "team": "New Team",
+                        "price": 5.0,
+                        "decision_price": 5.0,
+                        "expected_points_adjusted": 3.0,
+                    },
+                    {
+                        "player_id": 101,
+                        "player_name": "Future Upgrade",
+                        "position": "MID",
+                        "team": "Future Team",
+                        "price": 5.0,
+                        "decision_price": 5.0,
+                        "expected_points_adjusted": 0.0,
+                    },
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    future = current.copy()
+    future["expected_points_adjusted"] = 1.0
+    future.loc[future["player_id"] == 100, "expected_points_adjusted"] = 3.0
+    future.loc[future["player_id"] == 101, "expected_points_adjusted"] = future_player_101_points
+    future["gameweek"] = 11
+    future_2 = future.copy()
+    future_2["gameweek"] = 12
+    return StrategyContext(
+        season="2024-25",
+        gameweek=10,
+        squad=squad,
+        predictions=current,
+        bank=0.0,
+        free_transfers=1,
+        available_data=pd.DataFrame(),
+        free_transfer_cap=5,
+        future_predictions={11: future, 12: future_2},
+    )
+
+
+def test_lookahead_banks_when_a_better_future_transfer_is_visible():
+    decision = TwoGameweekLookaheadStrategy().decide(_lookahead_context(8.0))
+
+    assert not decision.made
+
+
+def test_lookahead_transfers_when_now_is_better_than_waiting():
+    decision = TwoGameweekLookaheadStrategy().decide(_lookahead_context(0.0))
+
+    assert decision.made
+    assert decision.incoming_id == 100
 
 
 def test_validate_squad_accepts_fpl_roster_shape_and_budget():

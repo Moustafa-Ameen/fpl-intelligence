@@ -30,6 +30,9 @@ def test_load_players_adds_display_columns():
     assert players.loc[0, "player_name"] == "Mohamed Salah"
     assert players.loc[0, "team_name"] == "Liverpool"
     assert players.loc[0, "position"] == "Midfielder"
+    assert players.loc[0, "element_id"] == 1
+    assert players.loc[0, "team_id"] == 1
+    assert players.loc[0, "position_id"] == 3
     assert players.loc[0, "price"] == 14.0
     assert players.loc[0, "value_score"] == 20.0
     assert players.loc[0, "defensive_contribution_per_90"] == 5.2

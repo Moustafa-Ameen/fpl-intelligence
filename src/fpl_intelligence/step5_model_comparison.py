@@ -17,6 +17,7 @@ from fpl_intelligence.step4_models import (
     build_minutes_classifier,
     build_preprocessor,
     build_ridge_model,
+    feature_columns_for_mode,
     load_historical_player_gameweeks,
     rmse,
     split_train_test,
@@ -37,10 +38,10 @@ class RegressionModelResult:
     rmse: float
 
 
-def build_random_forest_model() -> Pipeline:
+def build_random_forest_model(feature_columns: list[str] | None = None) -> Pipeline:
     return Pipeline(
         steps=[
-            ("preprocessor", build_preprocessor()),
+            ("preprocessor", build_preprocessor(feature_columns)),
             (
                 "model",
                 RandomForestRegressor(
@@ -54,10 +55,10 @@ def build_random_forest_model() -> Pipeline:
     )
 
 
-def build_gradient_boosting_model() -> Pipeline:
+def build_gradient_boosting_model(feature_columns: list[str] | None = None) -> Pipeline:
     return Pipeline(
         steps=[
-            ("preprocessor", build_preprocessor()),
+            ("preprocessor", build_preprocessor(feature_columns)),
             (
                 "model",
                 GradientBoostingRegressor(
@@ -86,19 +87,23 @@ def evaluate_predictions(
     )
 
 
-def train_regression_models(players: pd.DataFrame) -> tuple[list[RegressionModelResult], Pipeline]:
+def train_regression_models(
+    players: pd.DataFrame,
+    feature_mode: str = "baseline",
+) -> tuple[list[RegressionModelResult], Pipeline]:
+    feature_columns = feature_columns_for_mode(feature_mode)
     train, test = split_train_test(players)
     actual = test["next_gameweek_points"]
 
-    ridge_model = build_ridge_model()
-    random_forest_model = build_random_forest_model()
-    gradient_boosting_model = build_gradient_boosting_model()
-    minutes_model = build_minutes_classifier()
+    ridge_model = build_ridge_model(feature_columns)
+    random_forest_model = build_random_forest_model(feature_columns)
+    gradient_boosting_model = build_gradient_boosting_model(feature_columns)
+    minutes_model = build_minutes_classifier(feature_columns)
 
-    ridge_model.fit(train[FEATURE_COLUMNS], train["next_gameweek_points"])
-    random_forest_model.fit(train[FEATURE_COLUMNS], train["next_gameweek_points"])
-    gradient_boosting_model.fit(train[FEATURE_COLUMNS], train["next_gameweek_points"])
-    minutes_model.fit(train[FEATURE_COLUMNS], (train["minutes"] >= 60).astype(int))
+    ridge_model.fit(train[feature_columns], train["next_gameweek_points"])
+    random_forest_model.fit(train[feature_columns], train["next_gameweek_points"])
+    gradient_boosting_model.fit(train[feature_columns], train["next_gameweek_points"])
+    minutes_model.fit(train[feature_columns], (train["minutes"] >= 60).astype(int))
 
     results = [
         evaluate_predictions(
@@ -111,19 +116,19 @@ def train_regression_models(players: pd.DataFrame) -> tuple[list[RegressionModel
             "Ridge Regression",
             ridge_model,
             actual,
-            ridge_model.predict(test[FEATURE_COLUMNS]),
+            ridge_model.predict(test[feature_columns]),
         ),
         evaluate_predictions(
             "Random Forest Regressor",
             random_forest_model,
             actual,
-            random_forest_model.predict(test[FEATURE_COLUMNS]),
+            random_forest_model.predict(test[feature_columns]),
         ),
         evaluate_predictions(
             "Gradient Boosting Regressor",
             gradient_boosting_model,
             actual,
-            gradient_boosting_model.predict(test[FEATURE_COLUMNS]),
+            gradient_boosting_model.predict(test[feature_columns]),
         ),
     ]
 
@@ -189,11 +194,12 @@ def aggregate_feature_importance(importance: pd.DataFrame) -> pd.DataFrame:
 def get_predictions_for_result(
     result: RegressionModelResult,
     test: pd.DataFrame,
+    feature_columns: list[str] | None = None,
 ) -> np.ndarray | pd.Series:
     if result.model is None:
         return test["points_last_3"] / 3
 
-    return result.model.predict(test[FEATURE_COLUMNS])
+    return result.model.predict(test[feature_columns or FEATURE_COLUMNS])
 
 
 def print_top_adjusted_for_best_model(
@@ -201,17 +207,23 @@ def print_top_adjusted_for_best_model(
     results: list[RegressionModelResult],
     minutes_model: Pipeline,
     sample_gameweek: int = 10,
+    feature_mode: str = "baseline",
 ) -> None:
+    feature_columns = feature_columns_for_mode(feature_mode)
     _, test = split_train_test(players)
     best = min(results, key=lambda result: result.mae)
     ridge = next(result for result in results if result.name == "Ridge Regression")
 
     sample = test[test["gameweek"] == sample_gameweek].copy()
     sample["probability_60_plus_minutes"] = minutes_model.predict_proba(
-        sample[FEATURE_COLUMNS]
+        sample[feature_columns]
     )[:, 1]
-    sample["best_model_predicted_points"] = get_predictions_for_result(best, sample)
-    sample["ridge_predicted_points"] = get_predictions_for_result(ridge, sample)
+    sample["best_model_predicted_points"] = get_predictions_for_result(
+        best, sample, feature_columns
+    )
+    sample["ridge_predicted_points"] = get_predictions_for_result(
+        ridge, sample, feature_columns
+    )
     sample["best_expected_points_adjusted"] = (
         sample["best_model_predicted_points"] * sample["probability_60_plus_minutes"]
     )

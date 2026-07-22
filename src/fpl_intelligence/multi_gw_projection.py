@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import joblib
+import numpy as np
 import pandas as pd
 
-from fpl_intelligence.step4_models import MINUTES_MODEL_PATH
+from fpl_intelligence.step4_models import MINUTES_BAND_MODEL_PATH, MINUTES_MODEL_PATH
 from fpl_intelligence.step5_model_comparison import GRADIENT_BOOSTING_MODEL_PATH
 
 ALLOWED_HORIZONS = (3, 5, 8)
@@ -27,16 +28,23 @@ RECENT_WINDOW = 3
 
 @lru_cache(maxsize=1)
 def load_planner_models():
-    """Load the trained general points model and 60+ minute classifier."""
-    missing = [
-        str(path)
-        for path in (GRADIENT_BOOSTING_MODEL_PATH, MINUTES_MODEL_PATH)
-        if not Path(path).exists()
-    ]
+    """Load the points model and the newest available minutes model artifact."""
+    missing = (
+        [str(GRADIENT_BOOSTING_MODEL_PATH)]
+        if not Path(GRADIENT_BOOSTING_MODEL_PATH).exists()
+        else []
+    )
+    if not Path(MINUTES_BAND_MODEL_PATH).exists() and not Path(MINUTES_MODEL_PATH).exists():
+        missing.append(str(MINUTES_BAND_MODEL_PATH))
     if missing:
         raise FileNotFoundError(f"Planner model artifacts are missing: {', '.join(missing)}")
 
-    return joblib.load(GRADIENT_BOOSTING_MODEL_PATH), joblib.load(MINUTES_MODEL_PATH)
+    minutes_path = (
+        MINUTES_BAND_MODEL_PATH
+        if Path(MINUTES_BAND_MODEL_PATH).exists()
+        else MINUTES_MODEL_PATH
+    )
+    return joblib.load(GRADIENT_BOOSTING_MODEL_PATH), joblib.load(minutes_path)
 
 
 def project_player(
@@ -125,14 +133,16 @@ def project_players(
             continue
 
         feature_frame = pd.DataFrame([item[1] for item in pending])
-        predicted_points = points_model.predict(feature_frame)
-        start_likelihoods = minutes_model.predict_proba(feature_frame)[:, 1]
+        predicted_points, projected_points, start_likelihoods = _projected_values(
+            points_model, minutes_model, feature_frame
+        )
         fixture_results: dict[int, list[dict[str, Any]]] = {index: [] for index in fixture_groups}
-        for pending_item, predicted, start_likelihood in zip(
-            pending, predicted_points, start_likelihoods, strict=True
+        for pending_item, predicted, projected, start_likelihood in zip(
+            pending, predicted_points, projected_points, start_likelihoods, strict=True
         ):
             index, _, fixture = pending_item
             predicted_value = max(0.0, float(predicted))
+            projected_value = max(0.0, float(projected))
             start_value = max(0.0, min(1.0, float(start_likelihood)))
             fixture_results[index].append(
                 {
@@ -142,7 +152,7 @@ def project_players(
                     "opponent_strength": fixture["opponent_strength"],
                     "predicted_points": round(predicted_value, 2),
                     "start_likelihood": round(start_value, 4),
-                    "projected_points": round(predicted_value * start_value, 2),
+                    "projected_points": round(projected_value, 2),
                 }
             )
 
@@ -195,8 +205,13 @@ def _project_row(
         fixture_projections = []
         for fixture in player_fixtures:
             features = _feature_row(player, fixture, baseline)
-            predicted_points = max(0.0, float(points_model.predict(pd.DataFrame([features]))[0]))
-            start_likelihood = float(minutes_model.predict_proba(pd.DataFrame([features]))[0][1])
+            feature_frame = pd.DataFrame([features])
+            predicted_points, projected_points, start_likelihood = _projected_values(
+                points_model, minutes_model, feature_frame
+            )
+            predicted_points = max(0.0, float(predicted_points[0]))
+            projected_points = max(0.0, float(projected_points[0]))
+            start_likelihood = float(start_likelihood[0])
             start_likelihood = max(0.0, min(1.0, start_likelihood))
             fixture_projections.append(
                 {
@@ -206,7 +221,7 @@ def _project_row(
                     "opponent_strength": fixture["opponent_strength"],
                     "predicted_points": round(predicted_points, 2),
                     "start_likelihood": round(start_likelihood, 4),
-                    "projected_points": round(predicted_points * start_likelihood, 2),
+                    "projected_points": round(projected_points, 2),
                 }
             )
 
@@ -225,15 +240,40 @@ def _project_row(
     return output
 
 
+def _projected_values(points_model: Any, minutes_model: Any, features: pd.DataFrame):
+    """Return raw points, adjusted points, and 60+ likelihood.
+
+    The fallback keeps pre-M2 binary artifacts usable.  New M2 artifacts expose
+    ``predict_expected_points`` and therefore calculate the full three-band
+    conditional expectation.
+    """
+    predicted_points = points_model.predict(features)
+    if hasattr(minutes_model, "predict_expected_points"):
+        projected_points = minutes_model.predict_expected_points(features)
+        start_likelihoods = np.asarray(minutes_model.predict_proba(features))[:, 2]
+    else:
+        start_likelihoods = np.asarray(minutes_model.predict_proba(features))[:, 1]
+        projected_points = predicted_points * start_likelihoods
+    return predicted_points, projected_points, start_likelihoods
+
+
 def _feature_row(
     player: dict[str, Any], fixture: dict[str, Any], baseline: dict[str, Any]
 ) -> dict[str, Any]:
     return {
-        "price": _number(player.get("price")),
+        # Live bootstrap values are fetched before the upcoming deadline, so they
+        # already represent the model's pre-deadline market features. Historical
+        # rows use the explicitly lagged equivalents built in historical_data.py.
+        "price_before_deadline": _number(
+            player.get("price_before_deadline", player.get("price"))
+        ),
         "minutes_last_3": _number(player.get("minutes_last_3", baseline.get("minutes_last_3", 0))),
         "points_last_3": _number(player.get("points_last_3", baseline.get("points_last_3", 0))),
         "opponent_strength": _number(fixture.get("opponent_strength")),
-        "selected_by_percent": _number(player.get("selected_by_percent")),
+        "selected_by_percent_before_deadline": _number(
+            player.get("selected_by_percent_before_deadline", player.get("selected_by_percent"))
+        ),
+        "market_snapshot_available": _number(player.get("market_snapshot_available", 1)),
         "position": _position_code(player.get("position")),
         "home_or_away": "H" if fixture.get("home") else "A",
     }

@@ -6,12 +6,18 @@ import pytest
 from fpl_intelligence.backtest_transfer_strategy import TransferDecision, select_starting_xi
 from fpl_intelligence.season_benchmark import (
     DeterministicTransferStrategy,
+    NoTransfersStrategy,
     StrategyContext,
     _assert_transfer_budget,
     append_result_to_history,
+    get_training_data_for_season,
     load_historical_player_gameweeks,
+    load_max_free_transfers,
     run_season_benchmark,
     score_gameweek,
+    score_realistic_gameweek,
+    train_future_gameweek_predictions,
+    train_realistic_captain_predictions,
 )
 
 
@@ -146,13 +152,105 @@ def test_no_transfer_strategy_runs_a_complete_historical_season(tmp_path: Path):
     assert result.transfers_made == 0
     assert result.total_hit_cost == 0
     assert result.total_points > 0
+    assert result.realistic_total_points > 0
+    assert result.realistic_total_points != result.total_points
     assert result.rows["max_training_current_season_gameweek"].dropna().max() == 37
+    assert result.rows["captain_max_training_current_season_gameweek"].dropna().max() == 37
 
     history_path = tmp_path / "season_benchmark_history.csv"
-    assert append_result_to_history(result, history_path) is None
-    previous = append_result_to_history(result, history_path)
+    assert append_result_to_history(result, history_path, run_id="run-1") is None
+    previous = append_result_to_history(result, history_path, run_id="run-2")
     assert previous is not None
-    assert len(pd.read_csv(history_path)) == 2
+    history = pd.read_csv(history_path)
+    assert len(history) == 2
+    assert {
+        "hindsight_total_points",
+        "realistic_total_points",
+        "captaincy_gap",
+        "validation_status",
+    }.issubset(history.columns)
+
+    conditional_result = run_season_benchmark(
+        players,
+        "2023-24",
+        NoTransfersStrategy(),
+        model_version="test",
+        minutes_mode="conditional_bands",
+    )
+    assert conditional_result.rows["minutes_model_mode"].eq("conditional_bands").all()
+    assert conditional_result.realistic_total_points != result.realistic_total_points
+
+
+def test_append_history_handles_old_narrow_schema(tmp_path: Path):
+    players = load_historical_player_gameweeks()
+    result = run_season_benchmark(
+        players,
+        "2023-24",
+        NoTransfersStrategy(),
+        model_version="test",
+    )
+    history_path = tmp_path / "old_history.csv"
+    pd.DataFrame(
+        [{"season": "2022-23", "strategy_name": "no-transfers", "total_points": 1.0}]
+    ).to_csv(history_path, index=False)
+
+    append_result_to_history(result, history_path, run_id="new-run")
+    history = pd.read_csv(history_path)
+
+    assert len(history) == 2
+    assert set(history.columns) >= {
+        "run_id",
+        "commit_hash",
+        "optimizer_version",
+        "variant_name",
+        "realistic_total_points",
+    }
+    assert history.iloc[0]["variant_name"] == "baseline"
+    assert history.iloc[1]["run_id"] == "new-run"
+
+
+def test_future_predictions_are_point_in_time_safe_for_both_horizons():
+    players = load_historical_player_gameweeks()
+    original = train_future_gameweek_predictions(
+        players,
+        "2024-25",
+        10,
+        horizons=(1, 2),
+    )
+    mutated = players.copy()
+    future_mask = (mutated["season"] == "2024-25") & (mutated["gameweek"] >= 10)
+    for column in (
+        "minutes",
+        "total_points",
+        "next_gameweek_points",
+        "expected_goals",
+        "expected_assists",
+    ):
+        mutated.loc[future_mask, column] = 9999.0
+    changed = train_future_gameweek_predictions(
+        mutated,
+        "2024-25",
+        10,
+        horizons=(1, 2),
+    )
+
+    for target_gameweek in (11, 12):
+        assert not original[target_gameweek].empty
+        assert original[target_gameweek]["as_of_gameweek"].eq(10).all()
+        assert original[target_gameweek]["future_target_gameweek"].eq(target_gameweek).all()
+        assert original[target_gameweek]["max_training_current_season_gameweek"].eq(9).all()
+        assert not {"minutes", "total_points", "next_gameweek_points"}.intersection(
+            original[target_gameweek].columns
+        )
+        pd.testing.assert_series_equal(
+            original[target_gameweek]
+            .set_index("player_id")["expected_points_adjusted"]
+            .sort_index(),
+            changed[target_gameweek]
+            .set_index("player_id")["expected_points_adjusted"]
+            .sort_index(),
+            check_names=False,
+        )
 
 
 def test_invalid_transfer_decision_is_represented_explicitly():
@@ -170,3 +268,63 @@ def test_invalid_transfer_decision_is_represented_explicitly():
 
     with pytest.raises(AssertionError, match="exceeds"):
         _assert_transfer_budget(pd.DataFrame(_squad_rows()), decision, bank=0.0)
+
+
+def test_historical_transfer_caps_are_rule_versioned():
+    assert load_max_free_transfers("2023-24") == 2
+    assert load_max_free_transfers("2024-25") == 5
+    assert load_max_free_transfers("2025-26") == 5
+
+
+def test_realistic_captain_model_training_stops_before_target_gameweek():
+    players = load_historical_player_gameweeks()
+    target_gameweek = 10
+
+    training = get_training_data_for_season(players, "2024-25", target_gameweek)
+    captain_predictions = train_realistic_captain_predictions(
+        players, "2024-25", target_gameweek
+    )
+
+    assert int(training[training["season"] == "2024-25"]["gameweek"].max()) == 9
+    assert captain_predictions["captain_max_training_current_season_gameweek"].iloc[0] == 9
+    assert not (
+        (training["season"] == "2024-25") & (training["gameweek"] >= target_gameweek)
+    ).any()
+
+
+def test_realistic_captaincy_uses_vice_captain_when_captain_does_not_play():
+    from fpl_intelligence.backtest_transfer_strategy import select_starting_xi
+
+    squad = pd.DataFrame(_squad_rows())
+    projections = {int(player_id): 1.0 for player_id in squad["player_id"]}
+    lineup = select_starting_xi(squad, projections)
+    captain_id, vice_id = lineup.starting_ids[:2]
+
+    target = squad[["player_id", "position"]].copy()
+    target["minutes"] = 90
+    target["next_gameweek_points"] = 1.0
+    target.loc[target["player_id"] == captain_id, "minutes"] = 0
+    target.loc[target["player_id"] == captain_id, "next_gameweek_points"] = 0
+    target.loc[target["player_id"] == vice_id, "next_gameweek_points"] = 7
+
+    captain_predictions = target[["player_id"]].copy()
+    captain_predictions["captain_predicted_points"] = 1.0
+    captain_predictions.loc[
+        captain_predictions["player_id"] == captain_id, "captain_predicted_points"
+    ] = 10.0
+    captain_predictions.loc[
+        captain_predictions["player_id"] == vice_id, "captain_predicted_points"
+    ] = 9.0
+
+    score = score_realistic_gameweek(
+        squad,
+        target,
+        projections,
+        captain_predictions,
+    )
+
+    assert score.captain_id == captain_id
+    assert score.vice_captain_id == vice_id
+    assert score.vice_captain_fallback is True
+    assert score.captain_actual_points == 0
+    assert score.vice_captain_actual_points == 7

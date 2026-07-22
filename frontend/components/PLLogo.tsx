@@ -9,8 +9,8 @@ export function PLLogo({
 }) {
   return (
     <img
-      src="/pl-lion.png"
-      alt="Premier League"
+      src="/fpl-intelligence-lion.png"
+      alt="FPL Intelligence"
       width={size}
       height={height ?? size}
       className={className}

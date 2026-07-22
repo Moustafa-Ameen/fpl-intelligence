@@ -7,6 +7,15 @@ from typing import Any
 import pandas as pd
 import requests
 
+from fpl_intelligence.season_rules import (
+    RULES_SCHEMA_VERSION,
+    build_season_rules,
+    build_snapshot_metadata,
+    save_immutable_snapshot,
+    save_rules_manifest,
+    validate_bootstrap_onboarding,
+)
+
 FPL_BOOTSTRAP_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
@@ -28,6 +37,9 @@ TOP_LEVEL_KEY_DESCRIPTIONS = {
 }
 
 COLUMN_EXPLANATIONS = {
+    "element_id": "Stable FPL player identifier from the bootstrap element id.",
+    "team_id": "Stable FPL team identifier.",
+    "position_id": "Stable FPL position identifier.",
     "player_name": "Full player name built from first_name and second_name.",
     "web_name": "Short display name used by FPL.",
     "team_name": "Human-readable club name mapped from the player's team id.",
@@ -39,6 +51,12 @@ COLUMN_EXPLANATIONS = {
     "form": "Recent form value as reported by FPL.",
     "minutes": "Total Premier League minutes played in the current dataset.",
     "selected_by_percent": "Percentage of FPL managers currently owning the player.",
+    "status": "Current FPL availability status code.",
+    "chance_of_playing_next_round": "FPL-estimated chance of playing in the next round.",
+    "chance_of_playing_this_round": "FPL-estimated chance of playing in the current round.",
+    "news": "Current FPL news text associated with the player.",
+    "news_added": "Timestamp of the latest FPL news update, when supplied.",
+    "now_cost": "Current FPL price in tenths of the game currency.",
     "value_score": "Simple value metric: total_points divided by current price.",
     "defensive_contribution": (
         "Season-total FPL points awarded for meeting the defensive contribution threshold."
@@ -111,6 +129,7 @@ def load_players(bootstrap_data: dict[str, Any]) -> pd.DataFrame:
     )
 
     players["price"] = players["now_cost"] / 10
+    players["element_id"] = players["id"]
     players["player_name"] = players["first_name"] + " " + players["second_name"]
     players["points_per_game"] = pd.to_numeric(players["points_per_game"], errors="coerce")
     players["form"] = pd.to_numeric(players["form"], errors="coerce")
@@ -120,15 +139,84 @@ def load_players(bootstrap_data: dict[str, Any]) -> pd.DataFrame:
             players[column] = pd.to_numeric(players[column], errors="coerce").fillna(0.0)
         else:
             players[column] = 0.0
-    players["value_score"] = players["total_points"] / players["price"]
+    players["value_score"] = players["total_points"].div(
+        players["price"].where(players["price"] > 0)
+    ).fillna(0.0)
 
     columns = list(COLUMN_EXPLANATIONS)
+    for column in columns:
+        if column not in players:
+            players[column] = pd.NA
     return players[columns].sort_values("total_points", ascending=False).reset_index(drop=True)
 
 
 def save_players(players: pd.DataFrame, path: Path = PLAYERS_CURRENT_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     players.to_csv(path, index=False)
+
+
+def save_bootstrap_contract(
+    bootstrap_data: dict[str, Any],
+    *,
+    season: str,
+    source_url: str = FPL_BOOTSTRAP_URL,
+    retrieved_at: str | None = None,
+    cutoff_at: str | None = None,
+    snapshot_root: Path | None = None,
+    manifest_root: Path | None = None,
+) -> tuple[Path, Path, Path]:
+    """Persist raw bootstrap data, metadata, and the normalized rules manifest."""
+
+    onboarding_errors = validate_bootstrap_onboarding(bootstrap_data, season=season)
+    if onboarding_errors:
+        raise ValueError("Bootstrap onboarding validation failed: " + "; ".join(onboarding_errors))
+
+    metadata = build_snapshot_metadata(
+        bootstrap_data,
+        season=season,
+        source_url=source_url,
+        retrieved_at=retrieved_at,
+        cutoff_at=cutoff_at,
+        schema_version=RULES_SCHEMA_VERSION,
+    )
+    snapshot_path, metadata_path = save_immutable_snapshot(
+        bootstrap_data,
+        metadata,
+        root=snapshot_root if snapshot_root is not None else RAW_DATA_DIR / "snapshots",
+    )
+    rules = build_season_rules(
+        bootstrap_data,
+        season=season,
+        source_url=source_url,
+        retrieved_at=metadata["retrieved_at"],
+        cutoff_at=metadata["cutoff_at"],
+    )
+    manifest_path = save_rules_manifest(
+        rules,
+        root=manifest_root if manifest_root is not None else PROCESSED_DATA_DIR / "rules",
+    )
+    return snapshot_path, metadata_path, manifest_path
+
+
+def fetch_and_save_bootstrap(
+    *,
+    season: str,
+    source_url: str = FPL_BOOTSTRAP_URL,
+    legacy_path: Path = BOOTSTRAP_PATH,
+    snapshot_root: Path | None = None,
+    manifest_root: Path | None = None,
+) -> tuple[Path, Path, Path]:
+    """Fetch current bootstrap data and persist both legacy and M6 contracts."""
+
+    bootstrap_data = fetch_json(source_url)
+    save_json(bootstrap_data, legacy_path)
+    return save_bootstrap_contract(
+        bootstrap_data,
+        season=season,
+        source_url=source_url,
+        snapshot_root=snapshot_root,
+        manifest_root=manifest_root,
+    )
 
 
 def print_column_explanations() -> None:
