@@ -1,5 +1,6 @@
 import pandas as pd
 
+from fpl_intelligence.fixture_scenarios import build_fixture_scenario
 from fpl_intelligence.multi_gw_projection import project_player
 
 
@@ -79,3 +80,44 @@ def test_projection_handles_single_blank_double_and_fixture_strength():
     assert len(projections[2]["fixtures"]) == 2
     assert projections[2]["projected_points"] == 12.0
     assert projections[0]["projected_points"] != projections[2]["projected_points"]
+
+
+def test_projection_can_carry_fixture_scenario_identity_and_status():
+    fixtures = [
+        {
+            "id": 1,
+            "event": 1,
+            "team_h": 1,
+            "team_a": 2,
+            "team_a_short": "EAS",
+            "opponent_strength": 900,
+            "kickoff_time": "2026-08-15T12:30:00Z",
+            "provisional_start_time": False,
+        }
+    ]
+    scenario = build_fixture_scenario(
+        fixtures, season="2026-27", start_gameweek=1, horizon_length=3
+    )
+    projections = project_player(
+        10,
+        1,
+        3,
+        players=[
+            {
+                "element_id": 10,
+                "name": "Example Midfielder",
+                "team_id": 1,
+                "position": "MID",
+                "price": 6.0,
+            }
+        ],
+        fixtures=fixtures,
+        teams=[{"id": 2, "name": "Easy FC", "short_name": "EAS"}],
+        models=(StrengthSensitivePointsModel(), AlwaysStartsModel()),
+        fixture_scenario=scenario,
+    )
+
+    assert projections[0]["fixture_scenario_id"] == scenario.scenario_id
+    assert projections[0]["fixture_data_hash"] == scenario.fixture_data_hash
+    assert projections[0]["fixture_confirmed_count"] == 1
+    assert projections[0]["fixtures"][0]["status"] == "confirmed"

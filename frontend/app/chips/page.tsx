@@ -197,7 +197,7 @@ export default function ChipsPage() {
             <div className="text-xs font-semibold uppercase tracking-[0.14em] text-fpl-gold">AI Tip</div>
             <h2 className="mt-1 text-[18px] font-semibold text-primary">Personalized chip timing</h2>
             <p className="mt-1 text-[13px] text-secondary">
-              Signals compare this gameweek with your own recent squad baseline.
+              Recommendations come from the same point-in-time chip and transfer engine used by the benchmark.
             </p>
           </div>
         </div>
@@ -218,29 +218,77 @@ export default function ChipsPage() {
           <div className="rounded-lg border border-fpl-border bg-[#161616] p-4 text-sm text-secondary">
             {chipTips.message}
           </div>
-        ) : chipTips.alerts.length ? (
-          <div className="grid gap-3 lg:grid-cols-2">
-            {chipTips.alerts.map((alert) => (
-              <div key={alert.key} className="rounded-lg border border-fpl-gold/35 bg-fpl-gold/[0.05] p-4">
-                <div className="flex items-start justify-between gap-4">
+        ) : (
+          <>
+            {chipTips.recommendation ? (
+              <div className="rounded-lg border border-fpl-green/30 bg-fpl-green/[0.05] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <div className="text-sm font-semibold text-fpl-gold">{alert.chip}</div>
-                    <p className="mt-2 text-sm leading-6 text-primary">{alert.message}</p>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="font-mono text-lg font-semibold text-fpl-gold">
-                      {alert.strength_percent.toFixed(0)}%
+                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-fpl-green">
+                      Optimizer recommendation · GW{chipTips.recommendation.gameweek}
                     </div>
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">relative signal</div>
+                    <h3 className="mt-1 text-xl font-semibold text-primary">
+                      {chipTips.recommendation.action === "use"
+                        ? `Use ${chipTips.recommendation.chip}`
+                        : "Save your chips"}
+                    </h3>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-secondary">
+                      {chipTips.recommendation.reason}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-fpl-green/25 bg-fpl-green/10 px-4 py-3 text-right">
+                    <div className="font-mono text-2xl font-semibold text-fpl-green">
+                      {chipTips.recommendation.expected_horizon_gain > 0 ? "+" : ""}
+                      {chipTips.recommendation.expected_horizon_gain.toFixed(2)}
+                    </div>
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">horizon points</div>
                   </div>
                 </div>
+                <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded border border-fpl-border bg-[#161616] p-3">
+                    <div className="text-xs text-muted">Immediate gain</div>
+                    <div className="mt-1 font-mono text-primary">{chipTips.recommendation.expected_immediate_gain.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded border border-fpl-border bg-[#161616] p-3">
+                    <div className="text-xs text-muted">Downside range</div>
+                    <div className="mt-1 font-mono text-primary">
+                      {chipTips.recommendation.downside_range.low.toFixed(1)}–{chipTips.recommendation.downside_range.high.toFixed(1)}
+                    </div>
+                  </div>
+                  <div className="rounded border border-fpl-border bg-[#161616] p-3">
+                    <div className="text-xs text-muted">Confidence</div>
+                    <div className="mt-1 capitalize text-primary">{chipTips.recommendation.confidence}</div>
+                  </div>
+                  <div className="rounded border border-fpl-border bg-[#161616] p-3">
+                    <div className="text-xs text-muted">Transfer interaction</div>
+                    <div className="mt-1 text-primary">
+                      {chipTips.recommendation.ordinary_transfer_applied ? "Transfer included" : "No transfer"}
+                    </div>
+                  </div>
+                </div>
+                {chipTips.recommendation.best_alternative ? (
+                  <div className="mt-4 text-xs text-secondary">
+                    Best projected alternative: use {chipTips.recommendation.best_alternative.chip} in GW
+                    {chipTips.recommendation.best_alternative.gameweek} for +
+                    {chipTips.recommendation.best_alternative.expected_horizon_gain.toFixed(2)} horizon points.
+                  </div>
+                ) : null}
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-fpl-green/20 bg-fpl-green/[0.04] p-4 text-sm text-secondary">
-            {chipTips.message}
-          </div>
+            ) : null}
+            {chipTips.alerts.length ? (
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {chipTips.alerts.map((alert) => (
+                  <div key={alert.key} className="rounded-lg border border-fpl-gold/35 bg-fpl-gold/[0.05] p-4">
+                    <div className="text-xs font-semibold uppercase tracking-[0.12em] text-fpl-gold">Explanatory squad signal · {alert.chip}</div>
+                    <p className="mt-2 text-sm leading-6 text-primary">{alert.message}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="mt-4 text-xs text-muted">
+              {chipTips.model} · {chipTips.model_version} · data cutoff {chipTips.data_cutoff ?? "live"}
+            </div>
+          </>
         )}
       </Panel>
 

@@ -8,8 +8,8 @@ real manager would have scored.
 The simulation uses starting-XI-only scoring, legal formations, basic autosubs,
 free-transfer banking, hit costs, budget and club limits, and reports two captaincy
 tracks: hindsight-optimal attribution and point-in-time realistic captain/vice
-selection. Chips, injury/news reactions, exact intraweek price-change timing, and a
-fully realistic human squad selection process are not simulated.
+selection. Chips are opt-in through ``chip_mode``; the default no-chip path is
+the permanent control and the baseline planner is deliberately provisional.
 
 The strategy interface is deliberately small: a strategy receives the current
 squad and only the data available before the target gameweek, then returns a
@@ -20,15 +20,17 @@ without changing scoring, transfer accounting, or result persistence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import uuid
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
@@ -46,8 +48,33 @@ from fpl_intelligence.backtest_transfer_strategy import (
     select_starting_xi,
     validate_squad,
 )
+from fpl_intelligence.beam_search import DeterministicBeamPlanner
+from fpl_intelligence.chip_simulation import (
+    CHIP_MODE_BASELINE,
+    CHIP_MODE_BEAM,
+    CHIP_MODE_NONE,
+    CHIP_MODES,
+    ChipCounterfactual,
+    ChipDecision,
+    DeterministicChipPlanner,
+    apply_chip,
+    apply_chip_to_score,
+    apply_squad_transition,
+    bench_points_not_autosubbed,
+    chip_replaces_ordinary_transfer,
+    initial_chip_state,
+)
+from fpl_intelligence.component_projection import (
+    component_feature_columns,
+    default_dc_rule_versions,
+    fit_component_projection_model,
+)
+from fpl_intelligence.fixture_scenarios import (
+    build_historical_fixture_scenario,
+)
+from fpl_intelligence.historical_data import load_historical_raw
+from fpl_intelligence.season_rules import build_historical_season_rules
 from fpl_intelligence.step4_models import (
-    FEATURE_COLUMNS,
     build_minutes_classifier,
     build_ridge_model,
     feature_columns_for_mode,
@@ -67,6 +94,9 @@ HISTORICAL_MAX_FREE_TRANSFERS = {
 DEFAULT_BENCHMARK_SEASONS = ("2023-24", "2024-25")
 DEFAULT_MODEL = "Ridge Regression"
 DEFAULT_MODEL_VERSION = "local benchmark"
+DEFAULT_PROJECTION_MODE = "total_points"
+CHIP_MODE_DEFAULT = CHIP_MODE_NONE
+PROJECTION_MODES = ("total_points", "components")
 OPTIMIZER_VERSION = "m3.5-milp-v1"
 HISTORY_COLUMNS = [
     "run_timestamp",
@@ -93,6 +123,10 @@ HISTORY_COLUMNS = [
     "initial_bank",
     "final_bank",
     "validation_status",
+    "chip_mode",
+    "chips_used",
+    "chip_points",
+    "rules_version",
 ]
 
 
@@ -163,6 +197,9 @@ class SeasonBenchmarkResult:
     max_free_transfers: int
     initial_bank: float
     final_bank: float
+    chip_mode: str = CHIP_MODE_NONE
+    chip_points: float = 0.0
+    chips_used: int = 0
 
 
 @dataclass(frozen=True)
@@ -211,6 +248,79 @@ def get_training_data_for_season(
     return training
 
 
+def _component_target_predictions(
+    training: pd.DataFrame,
+    target: pd.DataFrame,
+    *,
+    feature_mode: str,
+    minutes_mode: str,
+) -> pd.DataFrame:
+    """Apply M7 component scoring to one target gameweek."""
+
+    component_columns = component_feature_columns(feature_mode)
+    target_bps_rule_version = (
+        str(target["bps_rule_version"].iloc[0])
+        if "bps_rule_version" in target.columns and not target.empty
+        else None
+    )
+    component_model = fit_component_projection_model(
+        training,
+        feature_mode=feature_mode,
+        target_bps_rule_version=target_bps_rule_version,
+    )
+
+    if minutes_mode == "binary":
+        minutes_model = build_minutes_classifier(feature_columns_for_mode(feature_mode))
+        minutes_features = feature_columns_for_mode(feature_mode)
+        minutes_model.fit(
+            training[minutes_features], (training["minutes"] >= 60).astype(int)
+        )
+        probability_60_plus = minutes_model.predict_proba(
+            target[feature_columns_for_mode(feature_mode)]
+        )[:, 1]
+        band_probabilities = np.column_stack(
+            [1.0 - probability_60_plus, np.zeros(len(target)), probability_60_plus]
+        )
+        predicted_bands = band_probabilities.argmax(axis=1)
+    else:
+        minutes_band_model = fit_minutes_band_conditional_model(
+            training, feature_columns_for_mode(feature_mode)
+        )
+        band_probabilities = minutes_band_model.predict_proba(
+            target[feature_columns_for_mode(feature_mode)]
+        )
+        probability_60_plus = band_probabilities[:, 2]
+        predicted_bands = band_probabilities.argmax(axis=1)
+
+    component_predictions = component_model.predict_expected_points(
+        target[component_columns],
+        minutes_probabilities=band_probabilities,
+        dc_rule_versions=default_dc_rule_versions(target),
+    )
+    component_predictions = component_predictions.rename(
+        columns={
+            column: f"component_{column}"
+            for column in component_predictions.columns
+            if column.startswith("expected_")
+        }
+    )
+    output = target.copy()
+    output = output.join(component_predictions)
+    output["predicted_points"] = output["component_expected_points"]
+    output["expected_points_adjusted"] = output["component_expected_points"]
+    output["probability_0_minutes"] = band_probabilities[:, 0]
+    output["probability_1_59_minutes"] = band_probabilities[:, 1]
+    output["probability_60_plus_minutes_v2"] = band_probabilities[:, 2]
+    output["probability_60_plus_minutes"] = probability_60_plus
+    output["predicted_minutes_band"] = predicted_bands
+    output["component_regime_status"] = component_model.regime_status
+    output["component_training_bps_rule_versions"] = ",".join(
+        component_model.training_bps_rule_versions
+    )
+    output["model"] = "Component Projection"
+    return output
+
+
 def train_gameweek_predictions(
     players: pd.DataFrame,
     season: str,
@@ -218,6 +328,7 @@ def train_gameweek_predictions(
     model_name: str = DEFAULT_MODEL,
     minutes_mode: str = "binary",
     feature_mode: str = "baseline",
+    projection_mode: str = DEFAULT_PROJECTION_MODE,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train and predict one target gameweek using an expanding time window."""
 
@@ -225,6 +336,10 @@ def train_gameweek_predictions(
         raise ValueError(f"Unknown model {model_name!r}; choose from {', '.join(MODEL_BUILDERS)}")
     if minutes_mode not in {"binary", "conditional_bands"}:
         raise ValueError("minutes_mode must be 'binary' or 'conditional_bands'")
+    if projection_mode not in PROJECTION_MODES:
+        raise ValueError(
+            f"projection_mode must be one of {', '.join(PROJECTION_MODES)}"
+        )
     feature_columns = feature_columns_for_mode(feature_mode)
     training = get_training_data_for_season(players, season, gameweek)
     target = players[(players["season"] == season) & (players["gameweek"] == gameweek)].copy()
@@ -245,47 +360,68 @@ def train_gameweek_predictions(
         target["predicted_minutes_band"] = 2
         target["minutes_model_mode"] = minutes_mode
         target["feature_mode"] = feature_mode
+        target["projection_mode"] = projection_mode
         target["expected_points_adjusted"] = target["predicted_points"]
         target["training_row_count"] = 0
         target["max_training_current_season_gameweek"] = None
         target["model"] = "Preseason heuristic"
         return target, training
 
-    points_model: Pipeline = MODEL_BUILDERS[model_name](feature_columns)
-    points_model.fit(training[feature_columns], training["next_gameweek_points"])
-
-    target["predicted_points"] = points_model.predict(target[feature_columns])
-    if minutes_mode == "binary":
-        minutes_model = build_minutes_classifier(feature_columns)
-        minutes_model.fit(training[feature_columns], (training["minutes"] >= 60).astype(int))
-        target["probability_60_plus_minutes"] = minutes_model.predict_proba(
-            target[feature_columns]
-        )[:, 1]
-        target["expected_points_adjusted"] = (
-            target["predicted_points"] * target["probability_60_plus_minutes"]
-        ).clip(lower=0.0)
+    if projection_mode == "components":
+        target = _component_target_predictions(
+            training,
+            target,
+            feature_mode=feature_mode,
+            minutes_mode=minutes_mode,
+        )
     else:
-        # This is intentionally independent benchmark logic: it fits its own
-        # three-class model and band-specific point estimators for each target GW.
-        minutes_band_model = fit_minutes_band_conditional_model(training, feature_columns)
-        band_probabilities = minutes_band_model.predict_proba(target[feature_columns])
-        target["probability_0_minutes"] = band_probabilities[:, 0]
-        target["probability_1_59_minutes"] = band_probabilities[:, 1]
-        target["probability_60_plus_minutes_v2"] = band_probabilities[:, 2]
-        target["probability_60_plus_minutes"] = band_probabilities[:, 2]
-        target["predicted_minutes_band"] = minutes_band_model.predict(target[feature_columns])
-        target["expected_points_adjusted"] = minutes_band_model.predict_expected_points(
-            target[feature_columns]
-        ).clip(0.0)
+        points_model: Pipeline = MODEL_BUILDERS[model_name](feature_columns)
+        points_model.fit(training[feature_columns], training["next_gameweek_points"])
+
+        target["predicted_points"] = points_model.predict(target[feature_columns])
+        if minutes_mode == "binary":
+            minutes_model = build_minutes_classifier(feature_columns)
+            minutes_model.fit(
+                training[feature_columns], (training["minutes"] >= 60).astype(int)
+            )
+            target["probability_60_plus_minutes"] = minutes_model.predict_proba(
+                target[feature_columns]
+            )[:, 1]
+            target["expected_points_adjusted"] = (
+                target["predicted_points"] * target["probability_60_plus_minutes"]
+            ).clip(lower=0.0)
+        else:
+            # This is intentionally independent benchmark logic: it fits its own
+            # three-class model and band-specific point estimators for each target GW.
+            minutes_band_model = fit_minutes_band_conditional_model(
+                training, feature_columns
+            )
+            band_probabilities = minutes_band_model.predict_proba(
+                target[feature_columns]
+            )
+            target["probability_0_minutes"] = band_probabilities[:, 0]
+            target["probability_1_59_minutes"] = band_probabilities[:, 1]
+            target["probability_60_plus_minutes_v2"] = band_probabilities[:, 2]
+            target["probability_60_plus_minutes"] = band_probabilities[:, 2]
+            target["predicted_minutes_band"] = minutes_band_model.predict(
+                target[feature_columns]
+            )
+            target["expected_points_adjusted"] = (
+                minutes_band_model.predict_expected_points(target[feature_columns])
+                .clip(0.0)
+            )
     target["minutes_model_mode"] = minutes_mode
     target["feature_mode"] = feature_mode
+    target["projection_mode"] = projection_mode
     target["decision_price"] = target["price_before_deadline"].fillna(target["price"])
     target["training_row_count"] = len(training)
     current_training = training[training["season"] == season]
     target["max_training_current_season_gameweek"] = (
         None if current_training.empty else int(current_training["gameweek"].max())
     )
-    target["model"] = model_name
+    target["model"] = (
+        "Component Projection" if projection_mode == "components" else model_name
+    )
     return target, training
 
 
@@ -294,6 +430,7 @@ def _point_in_time_future_frame(
     season: str,
     decision_gameweek: int,
     target_gameweek: int,
+    feature_mode: str = "xg_xa",
 ) -> pd.DataFrame:
     """Build future target features using only the decision-time snapshot."""
 
@@ -335,7 +472,7 @@ def _point_in_time_future_frame(
         "position",
         *[
             feature
-            for feature in feature_columns_for_mode("xg_xa")
+            for feature in component_feature_columns(feature_mode)
             if feature not in {"home_or_away", "opponent_strength", "position"}
         ],
     ):
@@ -357,16 +494,21 @@ def train_future_gameweek_predictions(
     model_name: str = DEFAULT_MODEL,
     minutes_mode: str = "binary",
     feature_mode: str = "baseline",
+    projection_mode: str = DEFAULT_PROJECTION_MODE,
     horizons: Sequence[int] = (1, 2),
 ) -> dict[int, pd.DataFrame]:
     """Forecast t+1/t+2 using only information available before gameweek t."""
 
-    if any(horizon not in (1, 2) for horizon in horizons):
-        raise ValueError("future horizons must be 1 or 2 gameweeks")
+    if any(horizon < 1 or horizon > 8 for horizon in horizons):
+        raise ValueError("future horizons must be between 1 and 8 gameweeks")
     if model_name not in MODEL_BUILDERS:
         raise ValueError(f"Unknown model {model_name!r}; choose from {', '.join(MODEL_BUILDERS)}")
     if minutes_mode not in {"binary", "conditional_bands"}:
         raise ValueError("minutes_mode must be 'binary' or 'conditional_bands'")
+    if projection_mode not in PROJECTION_MODES:
+        raise ValueError(
+            f"projection_mode must be one of {', '.join(PROJECTION_MODES)}"
+        )
     feature_columns = feature_columns_for_mode(feature_mode)
     training = get_training_data_for_season(players, season, decision_gameweek)
     output: dict[int, pd.DataFrame] = {}
@@ -374,23 +516,34 @@ def train_future_gameweek_predictions(
     points_model: Pipeline | None = None
     minutes_model: Pipeline | None = None
     minutes_band_model: Any | None = None
+    component_model: Any | None = None
     if not training.empty:
-        points_model = MODEL_BUILDERS[model_name](feature_columns)
-        points_model.fit(training[feature_columns], training["next_gameweek_points"])
-        if minutes_mode == "binary":
-            minutes_model = build_minutes_classifier(feature_columns)
-            minutes_model.fit(
-                training[feature_columns], (training["minutes"] >= 60).astype(int)
+        if projection_mode == "components":
+            component_model = fit_component_projection_model(
+                training,
+                feature_mode=feature_mode,
             )
         else:
-            minutes_band_model = fit_minutes_band_conditional_model(
-                training, feature_columns
-            )
+            points_model = MODEL_BUILDERS[model_name](feature_columns)
+            points_model.fit(training[feature_columns], training["next_gameweek_points"])
+            if minutes_mode == "binary":
+                minutes_model = build_minutes_classifier(feature_columns)
+                minutes_model.fit(
+                    training[feature_columns], (training["minutes"] >= 60).astype(int)
+                )
+            else:
+                minutes_band_model = fit_minutes_band_conditional_model(
+                    training, feature_columns
+                )
 
     for horizon in horizons:
         target_gameweek = decision_gameweek + horizon
         target = _point_in_time_future_frame(
-            players, season, decision_gameweek, target_gameweek
+            players,
+            season,
+            decision_gameweek,
+            target_gameweek,
+            feature_mode=feature_mode,
         )
         if target.empty:
             output[target_gameweek] = pd.DataFrame()
@@ -405,6 +558,45 @@ def train_future_gameweek_predictions(
             ).fillna(0.0)
             target["expected_points_adjusted"] = target["predicted_points"]
             target["probability_60_plus_minutes"] = 0.5
+        elif projection_mode == "components":
+            assert component_model is not None
+            if minutes_mode == "binary":
+                minutes_model = build_minutes_classifier(feature_columns)
+                minutes_model.fit(
+                    training[feature_columns], (training["minutes"] >= 60).astype(int)
+                )
+                probability_60_plus = minutes_model.predict_proba(
+                    target[feature_columns]
+                )[:, 1]
+                band_probabilities = np.column_stack(
+                    [
+                        1.0 - probability_60_plus,
+                        np.zeros(len(target)),
+                        probability_60_plus,
+                    ]
+                )
+            else:
+                assert minutes_band_model is not None
+                band_probabilities = minutes_band_model.predict_proba(
+                    target[feature_columns]
+                )
+                probability_60_plus = band_probabilities[:, 2]
+            component_predictions = component_model.predict_expected_points(
+                target[component_feature_columns(feature_mode)],
+                minutes_probabilities=band_probabilities,
+                dc_rule_versions=default_dc_rule_versions(target),
+            )
+            component_predictions = component_predictions.rename(
+                columns={
+                    column: f"component_{column}"
+                    for column in component_predictions.columns
+                    if column.startswith("expected_")
+                }
+            )
+            target = target.join(component_predictions)
+            target["predicted_points"] = target["component_expected_points"]
+            target["expected_points_adjusted"] = target["component_expected_points"]
+            target["probability_60_plus_minutes"] = probability_60_plus
         else:
             assert points_model is not None
             target["predicted_points"] = points_model.predict(target[feature_columns])
@@ -428,6 +620,7 @@ def train_future_gameweek_predictions(
 
         target["minutes_model_mode"] = minutes_mode
         target["feature_mode"] = feature_mode
+        target["projection_mode"] = projection_mode
         target["training_row_count"] = len(training)
         target["max_training_current_season_gameweek"] = (
             decision_gameweek - 1 if decision_gameweek > 1 else None
@@ -448,6 +641,7 @@ def train_future_gameweek_predictions(
                 "probability_60_plus_minutes",
                 "minutes_model_mode",
                 "feature_mode",
+                "projection_mode",
                 "training_row_count",
                 "max_training_current_season_gameweek",
                 "as_of_gameweek",
@@ -461,6 +655,11 @@ def train_realistic_captain_predictions(
     players: pd.DataFrame,
     season: str,
     gameweek: int,
+    *,
+    model_name: str = DEFAULT_MODEL,
+    minutes_mode: str = "binary",
+    feature_mode: str = "baseline",
+    projection_mode: str = DEFAULT_PROJECTION_MODE,
 ) -> pd.DataFrame:
     """Train a fresh point-in-time Ridge model for captain selection."""
 
@@ -468,6 +667,10 @@ def train_realistic_captain_predictions(
     target = players[(players["season"] == season) & (players["gameweek"] == gameweek)].copy()
     if target.empty:
         raise ValueError(f"No target rows for {season} GW{gameweek}")
+    if projection_mode not in PROJECTION_MODES:
+        raise ValueError(
+            f"projection_mode must be one of {', '.join(PROJECTION_MODES)}"
+        )
 
     current_training = training[training["season"] == season]
     max_current_gameweek = (
@@ -481,14 +684,31 @@ def train_realistic_captain_predictions(
         projection = preseason.set_index("player_id")["preseason_value_score"]
         target["captain_predicted_points"] = target["player_id"].map(projection).fillna(0.0)
         target["captain_model"] = "Preseason captain fallback"
+    elif projection_mode == "components":
+        component_target = _component_target_predictions(
+            training,
+            target,
+            feature_mode=feature_mode,
+            minutes_mode=minutes_mode,
+        )
+        target["captain_predicted_points"] = component_target[
+            "component_expected_points"
+        ]
+        target["captain_model"] = "Component Projection"
     else:
-        model = build_ridge_model()
-        model.fit(training[FEATURE_COLUMNS], training["next_gameweek_points"])
-        target["captain_predicted_points"] = model.predict(target[FEATURE_COLUMNS])
-        target["captain_model"] = "Ridge Regression"
+        model = build_ridge_model(feature_columns_for_mode(feature_mode))
+        model.fit(
+            training[feature_columns_for_mode(feature_mode)],
+            training["next_gameweek_points"],
+        )
+        target["captain_predicted_points"] = model.predict(
+            target[feature_columns_for_mode(feature_mode)]
+        )
+        target["captain_model"] = model_name
 
     target["captain_training_row_count"] = len(training)
     target["captain_max_training_current_season_gameweek"] = max_current_gameweek
+    target["projection_mode"] = projection_mode
     return target
 
 
@@ -558,15 +778,22 @@ def run_season_benchmark(
     verbose: bool = False,
     minutes_mode: str = "binary",
     feature_mode: str = "baseline",
+    projection_mode: str = DEFAULT_PROJECTION_MODE,
+    chip_mode: str = CHIP_MODE_DEFAULT,
     prediction_cache: dict[
-        tuple[str, int, str, str, str], tuple[pd.DataFrame, pd.DataFrame]
+        tuple[str, int, str, str, str, str], tuple[pd.DataFrame, pd.DataFrame]
     ] | None = None,
-    captain_prediction_cache: dict[tuple[str, int], pd.DataFrame] | None = None,
+    captain_prediction_cache: dict[
+        tuple[str, int, str, str, str], pd.DataFrame
+    ] | None = None,
     future_prediction_cache: dict[
-        tuple[str, int, str, str, str], dict[int, pd.DataFrame]
+        tuple[str, int, str, str, str, str], dict[int, pd.DataFrame]
     ] | None = None,
 ) -> SeasonBenchmarkResult:
     """Run one strategy through every available gameweek in one season."""
+
+    if chip_mode not in CHIP_MODES:
+        raise ValueError(f"chip_mode must be one of {', '.join(CHIP_MODES)}")
 
     season_players = players[players["season"] == season].copy()
     gameweeks = sorted(int(value) for value in season_players["gameweek"].unique())
@@ -596,6 +823,14 @@ def run_season_benchmark(
     realistic_total_points = 0.0
     transfers_made = 0
     total_hit_cost = 0
+    chip_points = 0.0
+    chips_used = 0
+    rules = build_historical_season_rules(season)
+    chip_state = initial_chip_state(rules)
+    chip_planner = DeterministicChipPlanner()
+    beam_planner = DeterministicBeamPlanner()
+    fixture_scenario_cache: dict[tuple[int, int], Any] = {}
+    historical_raw, historical_teams = load_historical_raw([season])
 
     if verbose:
         print(f"Season benchmark: {season} | {strategy.name} {strategy.version}")
@@ -603,7 +838,14 @@ def run_season_benchmark(
         print(f"- Free-transfer cap: {transfer_cap}; initial bank: GBP {initial_bank:.1f}m")
 
     for gameweek in gameweeks:
-        cache_key = (season, gameweek, model_name, minutes_mode, feature_mode)
+        cache_key = (
+            season,
+            gameweek,
+            model_name,
+            minutes_mode,
+            feature_mode,
+            projection_mode,
+        )
         if prediction_cache is not None and cache_key in prediction_cache:
             target, available_data = prediction_cache[cache_key]
         else:
@@ -614,10 +856,13 @@ def run_season_benchmark(
                 model_name=model_name,
                 minutes_mode=minutes_mode,
                 feature_mode=feature_mode,
+                projection_mode=projection_mode,
             )
             if prediction_cache is not None:
                 prediction_cache[cache_key] = (target, available_data)
-        if getattr(strategy, "requires_future_predictions", False):
+        needs_future = getattr(strategy, "requires_future_predictions", False)
+        needs_future = needs_future or chip_mode in {CHIP_MODE_BASELINE, CHIP_MODE_BEAM}
+        if needs_future:
             if future_prediction_cache is not None and cache_key in future_prediction_cache:
                 future_predictions = future_prediction_cache[cache_key]
             else:
@@ -628,22 +873,48 @@ def run_season_benchmark(
                     model_name=model_name,
                     minutes_mode=minutes_mode,
                     feature_mode=feature_mode,
+                    projection_mode=projection_mode,
+                    horizons=(
+                        tuple(range(1, 9))
+                        if chip_mode == CHIP_MODE_BASELINE
+                        else (
+                            (1, 2, 3, 4, 5, 6)
+                            if chip_mode == CHIP_MODE_BEAM
+                            else (1, 2, 3)
+                        )
+                    ),
                 )
                 if future_prediction_cache is not None:
                     future_prediction_cache[cache_key] = future_predictions
         else:
             future_predictions = {}
         prices = _latest_prices(players, season, gameweek)
+        scenario_key = (gameweek, 8)
+        if scenario_key not in fixture_scenario_cache:
+            fixture_scenario_cache[scenario_key] = build_historical_fixture_scenario(
+                players,
+                season=season,
+                start_gameweek=gameweek,
+                horizon_length=8,
+                raw_fixture_rows=historical_raw,
+                historical_teams=historical_teams,
+            )
+        fixture_scenario = fixture_scenario_cache[scenario_key]
         squad["price"] = squad["player_id"].map(prices).fillna(squad["price"])
         predictions = target.copy()
         bank_before = bank
         free_transfers_before = free_transfers
-        decision = _empty_decision()
-        if gameweek >= 2:
+        pre_chip_squad = squad.copy()
+        squad_before_hash = _squad_hash(pre_chip_squad)
+        transfer_candidate = _empty_decision()
+        post_transfer_squad = pre_chip_squad.copy()
+        post_transfer_bank = bank
+        post_transfer_free_transfers = free_transfers
+        if gameweek >= 2 and chip_mode != CHIP_MODE_BEAM:
             context = StrategyContext(
                 season=season,
                 gameweek=gameweek,
-                squad=squad.copy(),
+                squad=pre_chip_squad.copy(),
                 predictions=predictions.copy(),
                 bank=bank,
                 free_transfers=free_transfers,
@@ -654,25 +925,164 @@ def run_season_benchmark(
                     for target_gameweek, frame in future_predictions.items()
                 },
             )
-            decision = strategy.decide(context)
-            if decision.made:
-                _assert_transfer_budget(squad, decision, bank)
-                squad = _apply_benchmark_transfer(squad, predictions, decision)
-                bank = round(
-                    bank + float(decision.outgoing_price) - float(decision.incoming_price),
+            transfer_candidate = strategy.decide(context)
+            if transfer_candidate.made:
+                _assert_transfer_budget(pre_chip_squad, transfer_candidate, bank)
+                post_transfer_squad = _apply_benchmark_transfer(
+                    pre_chip_squad, predictions, transfer_candidate
+                )
+                post_transfer_bank = round(
+                    bank
+                    + float(transfer_candidate.outgoing_price)
+                    - float(transfer_candidate.incoming_price),
                     1,
                 )
-                free_transfers = max(0, free_transfers - 1)
+                post_transfer_free_transfers = max(0, free_transfers - 1)
+
+        chip_decision = ChipDecision(gameweek=gameweek)
+        chip_definition = None
+        chip_squad = None
+        if chip_mode == CHIP_MODE_BASELINE:
+            chip_decision, chip_definition, chip_squad = chip_planner.decide(
+                chip_state,
+                gameweek,
+                pre_chip_squad.copy(),
+                predictions.copy(),
+                {gw: frame.copy() for gw, frame in future_predictions.items()},
+                bank=bank,
+                rules=rules,
+                no_chip_squad=post_transfer_squad.copy(),
+                no_chip_bank=post_transfer_bank,
+            )
+            if chip_definition is not None:
+                chip_state = apply_chip(chip_state, chip_definition, gameweek, rules)
+                chips_used += 1
+        elif chip_mode == CHIP_MODE_BEAM:
+            beam_action = beam_planner.decide(
+                gameweek=gameweek,
+                squad=pre_chip_squad.copy(),
+                bank=bank,
+                free_transfers=free_transfers,
+                chip_state=chip_state,
+                predictions=predictions.copy(),
+                future_predictions={
+                    target_gameweek: frame.copy()
+                    for target_gameweek, frame in future_predictions.items()
+                },
+                rules=rules,
+                fixture_scenario=fixture_scenario,
+            )
+            transfer_candidate = beam_action.transfer
+            chip_definition = beam_action.chip
+            chip_squad = beam_action.chip_squad
+            if transfer_candidate.made:
+                _assert_transfer_budget(pre_chip_squad, transfer_candidate, bank)
+                post_transfer_squad = _apply_benchmark_transfer(
+                    pre_chip_squad, predictions, transfer_candidate
+                )
+                post_transfer_bank = round(
+                    bank
+                    + float(transfer_candidate.outgoing_price)
+                    - float(transfer_candidate.incoming_price),
+                    1,
+                )
+                post_transfer_free_transfers = max(0, free_transfers - 1)
+            if chip_definition is not None:
+                chip_decision = ChipDecision(
+                    gameweek=gameweek,
+                    chip_name=chip_definition.name,
+                    chip_number=chip_definition.number,
+                    expected_points=beam_action.expected_points,
+                    no_chip_expected_points=beam_action.no_chip_expected_points,
+                    expected_gain=(
+                        beam_action.expected_horizon_points
+                        - beam_action.no_chip_horizon_points
+                    ),
+                    decision_status="planned",
+                    reason=beam_action.reason,
+                    expected_gameweek_points=beam_action.expected_points,
+                    expected_horizon_points=beam_action.expected_horizon_points,
+                    no_chip_horizon_points=beam_action.no_chip_horizon_points,
+                    future_opportunity_cost=beam_action.future_opportunity_cost,
+                    uncertainty_penalty=beam_action.uncertainty_penalty,
+                    counterfactuals=tuple(
+                        _beam_counterfactual(action, beam_action)
+                        for action in beam_planner.last_counterfactuals
+                    )
+                    or (
+                        ChipCounterfactual(
+                            chip_key=chip_definition.key,
+                            chip_number=chip_definition.number,
+                            legal=True,
+                            expected_gameweek_points=beam_action.expected_points,
+                            no_chip_gameweek_points=beam_action.no_chip_expected_points,
+                            expected_gain=(
+                                beam_action.expected_horizon_points
+                                - beam_action.no_chip_horizon_points
+                            ),
+                            status="selected",
+                            reason=beam_action.reason,
+                        ),
+                    ),
+                )
+            elif beam_planner.last_counterfactuals:
+                chip_decision = ChipDecision(
+                    gameweek=gameweek,
+                    expected_points=beam_action.expected_points,
+                    no_chip_expected_points=beam_action.no_chip_expected_points,
+                    expected_gameweek_points=beam_action.expected_points,
+                    expected_horizon_points=beam_action.expected_horizon_points,
+                    no_chip_horizon_points=beam_action.no_chip_horizon_points,
+                    decision_status="not_used",
+                    reason="selected no-chip control",
+                    counterfactuals=tuple(
+                        _beam_counterfactual(action, beam_action)
+                        for action in beam_planner.last_counterfactuals
+                    ),
+                )
+            if chip_definition is not None:
+                chip_state = apply_chip(chip_state, chip_definition, gameweek, rules)
+                chips_used += 1
+
+        ordinary_transfer_allowed = not chip_replaces_ordinary_transfer(chip_definition)
+        if chip_replaces_ordinary_transfer(chip_definition):
+            if chip_squad is None:
+                raise AssertionError("Squad-changing chip has no legal squad")
+            squad, post_chip_squad = apply_squad_transition(
+                pre_chip_squad, chip_squad, chip_definition
+            )
+            decision = _empty_decision()
+        else:
+            squad = post_transfer_squad
+            bank = post_transfer_bank
+            free_transfers = post_transfer_free_transfers
+            decision = transfer_candidate
+            if decision.made:
                 transfers_made += 1
                 total_hit_cost += decision.hit_cost
 
         projections = predictions.set_index("player_id")["expected_points_adjusted"].to_dict()
+        original_lineup = select_starting_xi(squad, projections)
         score = score_gameweek(squad, target, projections)
-        captain_cache_key = (season, gameweek)
+        captain_cache_key = (
+            season,
+            gameweek,
+            minutes_mode,
+            feature_mode,
+            projection_mode,
+        )
         if captain_prediction_cache is not None and captain_cache_key in captain_prediction_cache:
             captain_predictions = captain_prediction_cache[captain_cache_key]
         else:
-            captain_predictions = train_realistic_captain_predictions(players, season, gameweek)
+            captain_predictions = train_realistic_captain_predictions(
+                players,
+                season,
+                gameweek,
+                model_name=model_name,
+                minutes_mode=minutes_mode,
+                feature_mode=feature_mode,
+                projection_mode=projection_mode,
+            )
             if captain_prediction_cache is not None:
                 captain_prediction_cache[captain_cache_key] = captain_predictions
         realistic_score = score_realistic_gameweek(
@@ -681,23 +1091,67 @@ def run_season_benchmark(
             projections,
             captain_predictions,
         )
-        gross_points += score.points
-        total_points += score.points - decision.hit_cost
-        realistic_gross_points += realistic_score.points
-        realistic_total_points += realistic_score.points - decision.hit_cost
+        score_bench_points = bench_points_not_autosubbed(
+            target, score.bench_ids, score.autosub_ids
+        )
+        realistic_bench_points = bench_points_not_autosubbed(
+            target, original_lineup.bench_ids, realistic_score.autosub_ids
+        )
+        target_points = target.drop_duplicates("player_id").set_index("player_id")[
+            "next_gameweek_points"
+        ]
+        captain_actual = float(target_points.get(score.captain_id, 0.0))
+        realistic_captain_actual = realistic_score.captain_actual_points
+        if realistic_score.vice_captain_fallback:
+            realistic_captain_actual = realistic_score.vice_captain_actual_points
+        chip_score_points = apply_chip_to_score(
+            score.points,
+            captain_actual,
+            chip=chip_definition,
+            bench_points=score_bench_points,
+        )
+        realistic_chip_points = apply_chip_to_score(
+            realistic_score.points,
+            realistic_captain_actual,
+            chip=chip_definition,
+            bench_points=realistic_bench_points,
+        )
+        chip_realized_gain = chip_score_points - score.points
+        realistic_chip_realized_gain = realistic_chip_points - realistic_score.points
+        chip_points += chip_realized_gain
+        gross_points += chip_score_points
+        total_points += chip_score_points - decision.hit_cost
+        realistic_gross_points += realistic_chip_points
+        realistic_total_points += realistic_chip_points - decision.hit_cost
+        if chip_definition is not None and chip_definition.free_hit_reversion:
+            squad = post_chip_squad
+            bank = bank_before
+            free_transfers = free_transfers_before
+        bank_after = bank
+        free_transfers_after = min(transfer_cap, free_transfers + 1)
+        post_gameweek_squad_hash = _squad_hash(squad)
+        active_squad_hash = _squad_hash(
+            post_chip_squad
+            if chip_definition is not None and chip_definition.free_hit_reversion
+            else squad
+        )
+        counterfactuals = json.dumps(
+            [asdict(value) for value in chip_decision.counterfactuals],
+            sort_keys=True,
+        )
         rows.append(
             {
                 "season": season,
                 "gameweek": gameweek,
                 "strategy_name": strategy.name,
                 "model": target["model"].iloc[0],
-                "gross_points": score.points,
+                "gross_points": chip_score_points,
                 "raw_starter_points": score.raw_starter_points,
                 "hit_cost": decision.hit_cost,
-                "net_points": score.points - decision.hit_cost,
+                "net_points": chip_score_points - decision.hit_cost,
                 "cumulative_points": total_points,
-                "realistic_gross_points": realistic_score.points,
-                "realistic_net_points": realistic_score.points - decision.hit_cost,
+                "realistic_gross_points": realistic_chip_points,
+                "realistic_net_points": realistic_chip_points - decision.hit_cost,
                 "realistic_cumulative_points": realistic_total_points,
                 "captain_id": score.captain_id,
                 "realistic_captain_id": realistic_score.captain_id,
@@ -721,9 +1175,12 @@ def run_season_benchmark(
                 "net_projected_gain": round(decision.net_projected_gain, 3),
                 "bank_before": round(bank_before, 1),
                 "free_transfers_before": free_transfers_before,
+                "bank_after": round(bank_after, 1),
+                "free_transfers_after": free_transfers_after,
                 "training_row_count": int(target["training_row_count"].iloc[0]),
                 "minutes_model_mode": target["minutes_model_mode"].iloc[0],
                 "feature_mode": target["feature_mode"].iloc[0],
+                "projection_mode": target["projection_mode"].iloc[0],
                 "max_training_current_season_gameweek": target[
                     "max_training_current_season_gameweek"
                 ].iloc[0],
@@ -733,9 +1190,40 @@ def run_season_benchmark(
                 "captain_max_training_current_season_gameweek": captain_predictions[
                     "captain_max_training_current_season_gameweek"
                 ].iloc[0],
+                "chip_mode": chip_mode,
+                "chip_key": chip_decision.chip_key,
+                "chip_selected": chip_definition is not None,
+                "chip_used": chip_decision.chip_name if chip_definition is not None else "none",
+                "chip_slot": chip_decision.chip_number,
+                "ordinary_transfer_allowed": ordinary_transfer_allowed,
+                "ordinary_transfer_applied": decision.made,
+                "squad_before_hash": squad_before_hash,
+                "squad_after_hash": active_squad_hash,
+                "post_gameweek_squad_hash": post_gameweek_squad_hash,
+                "remaining_chips": "+".join(chip_state.remaining),
+                "expected_gameweek_points": round(
+                    chip_decision.expected_gameweek_points, 4
+                ),
+                "expected_horizon_points": round(
+                    chip_decision.expected_horizon_points, 4
+                ),
+                "no_chip_horizon_points": round(
+                    chip_decision.no_chip_horizon_points, 4
+                ),
+                "chip_expected_gain": round(chip_decision.expected_gain, 4),
+                "future_opportunity_cost": round(
+                    chip_decision.future_opportunity_cost, 4
+                ),
+                "uncertainty_penalty": round(chip_decision.uncertainty_penalty, 4),
+                "chip_realized_gain": round(chip_realized_gain, 4),
+                "realistic_chip_realized_gain": round(realistic_chip_realized_gain, 4),
+                "chip_counterfactuals": counterfactuals,
+                "rules_version": rules.rules_version,
+                "data_cutoff": f"{season}:GW{max(0, gameweek - 1):02d}",
+                **fixture_scenario.metadata(),
             }
         )
-        free_transfers = min(transfer_cap, free_transfers + 1)
+        free_transfers = free_transfers_after
         if verbose:
             print(
                 f"- GW{gameweek:02d}: {score.points:.1f} gross, captain {score.captain_id}, "
@@ -762,6 +1250,9 @@ def run_season_benchmark(
         max_free_transfers=transfer_cap,
         initial_bank=initial_bank,
         final_bank=round(bank, 1),
+        chip_mode=chip_mode,
+        chip_points=round(chip_points, 2),
+        chips_used=chips_used,
     )
     _assert_no_lookahead(result.rows, season)
     return result
@@ -777,6 +1268,8 @@ def run_benchmark_suite(
     max_free_transfers: int | None = None,
     minutes_mode: str = "binary",
     feature_mode: str = "baseline",
+    projection_mode: str = DEFAULT_PROJECTION_MODE,
+    chip_mode: str = CHIP_MODE_DEFAULT,
     verbose: bool = False,
 ) -> list[SeasonBenchmarkResult]:
     selected_strategies = list(
@@ -784,11 +1277,13 @@ def run_benchmark_suite(
         or (NoTransfersStrategy(), DeterministicTransferStrategy())
     )
     prediction_cache: dict[
-        tuple[str, int, str, str, str], tuple[pd.DataFrame, pd.DataFrame]
+        tuple[str, int, str, str, str, str], tuple[pd.DataFrame, pd.DataFrame]
     ] = {}
-    captain_prediction_cache: dict[tuple[str, int], pd.DataFrame] = {}
+    captain_prediction_cache: dict[
+        tuple[str, int, str, str, str], pd.DataFrame
+    ] = {}
     future_prediction_cache: dict[
-        tuple[str, int, str, str, str], dict[int, pd.DataFrame]
+        tuple[str, int, str, str, str, str], dict[int, pd.DataFrame]
     ] = {}
     return [
         run_season_benchmark(
@@ -800,6 +1295,8 @@ def run_benchmark_suite(
             max_free_transfers=max_free_transfers,
             minutes_mode=minutes_mode,
             feature_mode=feature_mode,
+            projection_mode=projection_mode,
+            chip_mode=chip_mode,
             verbose=verbose,
             prediction_cache=prediction_cache,
             captain_prediction_cache=captain_prediction_cache,
@@ -884,6 +1381,10 @@ def append_result_to_history(
                 "initial_bank": result.initial_bank,
                 "final_bank": result.final_bank,
                 "validation_status": validation_status,
+                "chip_mode": result.chip_mode,
+                "chips_used": result.chips_used,
+                "chip_points": result.chip_points,
+                "rules_version": build_historical_season_rules(result.season).rules_version,
             }
         ],
         columns=HISTORY_COLUMNS,
@@ -907,6 +1408,37 @@ def append_result_to_history(
     return previous
 
 
+def append_decision_rows_to_history(
+    result: SeasonBenchmarkResult,
+    *,
+    history_path: Path = HISTORY_PATH,
+    run_id: str,
+    variant_name: str = "baseline",
+    commit_hash: str = "unavailable",
+) -> Path:
+    """Persist per-Gameweek decisions and counterfactuals beside season history."""
+
+    if not str(run_id).strip():
+        raise ValueError("run_id must be a non-empty identifier")
+    decision_path = history_path.with_name(f"{history_path.stem}_decisions.csv")
+    rows = result.rows.copy()
+    rows.insert(0, "run_id", run_id)
+    rows.insert(1, "variant_name", variant_name)
+    rows.insert(2, "commit_hash", commit_hash)
+    rows.insert(3, "decision_timestamp", datetime.now(UTC).isoformat(timespec="seconds"))
+    key_columns = ["run_id", "variant_name", "season", "strategy_name", "gameweek"]
+    if decision_path.exists():
+        history = pd.read_csv(decision_path)
+    else:
+        history = pd.DataFrame()
+    combined = pd.concat([history, rows], ignore_index=True, sort=False)
+    if combined.duplicated(key_columns, keep=False).any():
+        raise ValueError("Decision history contains duplicate run/season/strategy/gameweek rows")
+    decision_path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(decision_path, index=False)
+    return decision_path
+
+
 def get_git_commit() -> str:
     """Return the current commit when available without making metadata fatal."""
 
@@ -928,7 +1460,7 @@ def print_result_summary(result: SeasonBenchmarkResult, previous: pd.Series | No
     print(
         f"{result.season} | {result.strategy_name} {result.strategy_version}: "
         f"{result.total_points:.1f} pts; {result.transfers_made} transfers; "
-        f"hits -{result.total_hit_cost}"
+        f"{result.chips_used} chips; hits -{result.total_hit_cost}"
     )
     print(
         f"  Hindsight captaincy: {result.total_points:.1f} pts | "
@@ -1047,6 +1579,39 @@ def _empty_decision() -> TransferDecision:
     return TransferDecision(None, None, None, None, 0.0, 0.0, 0, None, None)
 
 
+def _beam_counterfactual(beam_action: Any, selected_action: Any) -> ChipCounterfactual:
+    candidate_key = beam_action.chip.key if beam_action.chip is not None else "none"
+    selected_key = selected_action.chip.key if selected_action.chip is not None else "none"
+    expected_gain = (
+        beam_action.expected_horizon_points - beam_action.no_chip_horizon_points
+    )
+    return ChipCounterfactual(
+        chip_key=candidate_key,
+        chip_number=beam_action.chip.number if beam_action.chip is not None else None,
+        legal=True,
+        expected_gameweek_points=beam_action.expected_points,
+        no_chip_gameweek_points=beam_action.no_chip_expected_points,
+        expected_gain=expected_gain,
+        status="selected" if candidate_key == selected_key else "rejected",
+        reason=(
+            selected_action.reason
+            if candidate_key == selected_key
+            else "rejected: another legal beam branch had higher guarded value"
+        ),
+        expected_horizon_points=beam_action.expected_horizon_points,
+        no_chip_horizon_points=beam_action.no_chip_horizon_points,
+        future_opportunity_cost=beam_action.future_opportunity_cost,
+        uncertainty_penalty=beam_action.uncertainty_penalty,
+    )
+
+
+def _squad_hash(squad: pd.DataFrame) -> str:
+    columns = [column for column in ("player_id", "team", "position", "price") if column in squad]
+    records = squad[columns].copy().sort_values("player_id").to_dict("records")
+    payload = json.dumps(records, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the permanent FPL season benchmark.")
     parser.add_argument("--seasons", nargs="+", default=list(DEFAULT_BENCHMARK_SEASONS))
@@ -1057,6 +1622,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", default=DEFAULT_MODEL, choices=tuple(MODEL_BUILDERS))
     parser.add_argument("--model-version", default=DEFAULT_MODEL_VERSION)
+    parser.add_argument("--chip-mode", choices=CHIP_MODES, default=CHIP_MODE_DEFAULT)
     parser.add_argument("--history-path", type=Path, default=HISTORY_PATH)
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
@@ -1078,6 +1644,7 @@ def main() -> None:
         strategies=strategies,
         model_name=args.model,
         model_version=args.model_version,
+        chip_mode=args.chip_mode,
         verbose=args.verbose,
     )
     run_id = uuid.uuid4().hex
@@ -1086,6 +1653,12 @@ def main() -> None:
         previous = append_result_to_history(
             result,
             args.history_path,
+            run_id=run_id,
+            commit_hash=commit_hash,
+        )
+        append_decision_rows_to_history(
+            result,
+            history_path=args.history_path,
             run_id=run_id,
             commit_hash=commit_hash,
         )

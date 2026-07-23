@@ -9,6 +9,7 @@ from fpl_intelligence.season_benchmark import (
     NoTransfersStrategy,
     StrategyContext,
     _assert_transfer_budget,
+    append_decision_rows_to_history,
     append_result_to_history,
     get_training_data_for_season,
     load_historical_player_gameweeks,
@@ -17,6 +18,7 @@ from fpl_intelligence.season_benchmark import (
     score_gameweek,
     score_realistic_gameweek,
     train_future_gameweek_predictions,
+    train_gameweek_predictions,
     train_realistic_captain_predictions,
 )
 
@@ -169,6 +171,19 @@ def test_no_transfer_strategy_runs_a_complete_historical_season(tmp_path: Path):
         "captaincy_gap",
         "validation_status",
     }.issubset(history.columns)
+    decision_path = append_decision_rows_to_history(
+        result,
+        history_path=history_path,
+        run_id="run-1",
+    )
+    decision_history = pd.read_csv(decision_path)
+    assert len(decision_history) == 38
+    assert {
+        "chip_counterfactuals",
+        "squad_before_hash",
+        "post_gameweek_squad_hash",
+        "data_cutoff",
+    }.issubset(decision_history.columns)
 
     conditional_result = run_season_benchmark(
         players,
@@ -215,7 +230,7 @@ def test_future_predictions_are_point_in_time_safe_for_both_horizons():
         players,
         "2024-25",
         10,
-        horizons=(1, 2),
+        horizons=tuple(range(1, 9)),
     )
     mutated = players.copy()
     future_mask = (mutated["season"] == "2024-25") & (mutated["gameweek"] >= 10)
@@ -231,9 +246,10 @@ def test_future_predictions_are_point_in_time_safe_for_both_horizons():
         mutated,
         "2024-25",
         10,
-        horizons=(1, 2),
+        horizons=tuple(range(1, 9)),
     )
 
+    assert set(original) == set(range(11, 19))
     for target_gameweek in (11, 12):
         assert not original[target_gameweek].empty
         assert original[target_gameweek]["as_of_gameweek"].eq(10).all()
@@ -251,6 +267,27 @@ def test_future_predictions_are_point_in_time_safe_for_both_horizons():
             .sort_index(),
             check_names=False,
         )
+
+
+def test_component_projection_is_selectable_without_changing_control_default():
+    players = load_historical_player_gameweeks()
+    component_target, training = train_gameweek_predictions(
+        players,
+        "2024-25",
+        10,
+        feature_mode="xg_xa",
+        projection_mode="components",
+    )
+
+    assert not training.empty
+    assert component_target["projection_mode"].eq("components").all()
+    assert component_target["model"].eq("Component Projection").all()
+    assert "component_expected_points" in component_target
+    assert component_target["expected_points_adjusted"].ge(0).all()
+
+    control_target, _ = train_gameweek_predictions(players, "2024-25", 10)
+    assert control_target["projection_mode"].eq("total_points").all()
+    assert control_target["model"].eq("Ridge Regression").all()
 
 
 def test_invalid_transfer_decision_is_represented_explicitly():

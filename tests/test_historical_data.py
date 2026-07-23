@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+from fpl_intelligence.component_features import COMPONENT_TARGET_COLUMNS
 from fpl_intelligence.historical_data import (
     add_rolling_features,
     build_historical_player_gameweeks,
@@ -337,6 +338,29 @@ def test_lagged_xg_xa_features_never_use_target_gameweek_values():
     assert target["expected_assists_last_1"] == 0.1
     assert target["expected_goals_last_1"] != 9.0
     assert target["expected_assists_last_1"] != 8.0
+
+
+def test_lagged_component_features_never_use_target_gameweek_values():
+    rows = []
+    for gameweek in (1, 2):
+        row = {
+            "season": "2024-25",
+            "player_id": 1,
+            "gameweek": gameweek,
+            "minutes": 90,
+            "total_points": 4,
+            "expected_goals": 0.0,
+            "expected_assists": 0.0,
+            "defensive_contribution": float("nan"),
+        }
+        row.update({column: float(gameweek) for column in COMPONENT_TARGET_COLUMNS})
+        rows.append(row)
+
+    features = add_rolling_features(pd.DataFrame(rows))
+    target = features[features["gameweek"] == 2].iloc[0]
+    for column in COMPONENT_TARGET_COLUMNS:
+        assert target[f"{column}_last_1"] == 1.0
+        assert target[f"{column}_last_1"] != 2.0
 
 
 def test_processed_xg_xa_and_dc_rule_versions_cover_all_local_seasons():

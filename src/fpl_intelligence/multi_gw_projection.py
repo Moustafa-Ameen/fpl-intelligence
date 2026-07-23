@@ -18,6 +18,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from fpl_intelligence.fixture_scenarios import FixtureScenario
 from fpl_intelligence.step4_models import MINUTES_BAND_MODEL_PATH, MINUTES_MODEL_PATH
 from fpl_intelligence.step5_model_comparison import GRADIENT_BOOSTING_MODEL_PATH
 
@@ -56,6 +57,7 @@ def project_player(
     teams: Iterable[dict[str, Any]],
     models=None,
     history: pd.DataFrame | None = None,
+    fixture_scenario: FixtureScenario | None = None,
 ) -> list[dict[str, Any]]:
     """Return per-gameweek projections for one player.
 
@@ -76,6 +78,7 @@ def project_player(
         list(teams),
         models=models,
         history=history,
+        fixture_scenario=fixture_scenario,
     )
 
 
@@ -87,13 +90,18 @@ def project_players(
     horizon_length: int,
     models=None,
     history: pd.DataFrame | None = None,
+    fixture_scenario: FixtureScenario | None = None,
 ) -> list[dict[str, Any]]:
     """Project all supplied players over a 3, 5, or 8 gameweek horizon."""
     if horizon_length not in ALLOWED_HORIZONS:
         raise ValueError(f"horizon_length must be one of {ALLOWED_HORIZONS}")
 
     player_rows = list(players)
-    fixture_rows = list(fixtures)
+    fixture_rows = (
+        list(fixture_scenario.fixtures)
+        if fixture_scenario is not None
+        else list(fixtures)
+    )
     team_by_id = {team.get("id"): team for team in teams}
     points_model, minutes_model = models or load_planner_models()
     baselines = _recent_baselines(history)
@@ -108,13 +116,16 @@ def project_players(
             player_fixtures = _fixtures_for_player(player, gameweek, fixture_rows, team_by_id)
             if not player_fixtures:
                 projections[index]["projections"].append(
-                    {
-                        "gameweek": gameweek,
-                        "projected_points": 0.0,
-                        "blank": True,
-                        "double": False,
-                        "fixtures": [],
-                    }
+                    _gameweek_metadata(
+                        {
+                            "gameweek": gameweek,
+                            "projected_points": 0.0,
+                            "blank": True,
+                            "double": False,
+                            "fixtures": [],
+                        },
+                        fixture_scenario,
+                    )
                 )
                 continue
 
@@ -153,20 +164,24 @@ def project_players(
                     "predicted_points": round(predicted_value, 2),
                     "start_likelihood": round(start_value, 4),
                     "projected_points": round(projected_value, 2),
+                    **_fixture_metadata(fixture),
                 }
             )
 
         for index, fixture_projections in fixture_results.items():
             projections[index]["projections"].append(
-                {
-                    "gameweek": gameweek,
-                    "projected_points": round(
-                        sum(fixture["projected_points"] for fixture in fixture_projections), 2
-                    ),
-                    "blank": False,
-                    "double": len(fixture_projections) > 1,
-                    "fixtures": fixture_projections,
-                }
+                _gameweek_metadata(
+                    {
+                        "gameweek": gameweek,
+                        "projected_points": round(
+                            sum(fixture["projected_points"] for fixture in fixture_projections), 2
+                        ),
+                        "blank": False,
+                        "double": len(fixture_projections) > 1,
+                        "fixtures": fixture_projections,
+                    },
+                    fixture_scenario,
+                )
             )
 
     return projections
@@ -180,8 +195,14 @@ def _project_row(
     teams: list[dict[str, Any]],
     models=None,
     history: pd.DataFrame | None = None,
+    fixture_scenario: FixtureScenario | None = None,
 ) -> list[dict[str, Any]]:
     points_model, minutes_model = models or load_planner_models()
+    projection_fixtures = (
+        list(fixture_scenario.fixtures)
+        if fixture_scenario is not None
+        else fixtures
+    )
     team_by_id = {team.get("id"): team for team in teams}
     baselines = _recent_baselines(history)
     player_id = player.get("element_id", player.get("id"))
@@ -189,16 +210,21 @@ def _project_row(
 
     output = []
     for gameweek in range(start_gameweek, start_gameweek + horizon_length):
-        player_fixtures = _fixtures_for_player(player, gameweek, fixtures, team_by_id)
+        player_fixtures = _fixtures_for_player(
+            player, gameweek, projection_fixtures, team_by_id
+        )
         if not player_fixtures:
             output.append(
-                {
-                    "gameweek": gameweek,
-                    "projected_points": 0.0,
-                    "blank": True,
-                    "double": False,
-                    "fixtures": [],
-                }
+                _gameweek_metadata(
+                    {
+                        "gameweek": gameweek,
+                        "projected_points": 0.0,
+                        "blank": True,
+                        "double": False,
+                        "fixtures": [],
+                    },
+                    fixture_scenario,
+                )
             )
             continue
 
@@ -222,19 +248,23 @@ def _project_row(
                     "predicted_points": round(predicted_points, 2),
                     "start_likelihood": round(start_likelihood, 4),
                     "projected_points": round(projected_points, 2),
+                    **_fixture_metadata(fixture),
                 }
             )
 
         output.append(
-            {
-                "gameweek": gameweek,
-                "projected_points": round(
-                    sum(fixture["projected_points"] for fixture in fixture_projections), 2
-                ),
-                "blank": False,
-                "double": len(fixture_projections) > 1,
-                "fixtures": fixture_projections,
-            }
+            _gameweek_metadata(
+                {
+                    "gameweek": gameweek,
+                    "projected_points": round(
+                        sum(fixture["projected_points"] for fixture in fixture_projections), 2
+                    ),
+                    "blank": False,
+                    "double": len(fixture_projections) > 1,
+                    "fixtures": fixture_projections,
+                },
+                fixture_scenario,
+            )
         )
 
     return output
@@ -296,12 +326,14 @@ def _fixtures_for_player(
             opponent = team_by_id.get(opponent_id, {})
             rows.append(
                 {
+                    "fixture_id": fixture.get("fixture_id", fixture.get("id")),
                     "opponent": opponent.get("short_name") or fixture.get("team_a_short", "-"),
                     "opponent_name": opponent.get("name") or fixture.get("team_a_name", "Unknown"),
                     "home": True,
                     "opponent_strength": fixture.get(
                         "opponent_strength", opponent.get("strength_overall_away", 0)
                     ),
+                    **_fixture_metadata(fixture),
                 }
             )
         elif fixture.get("team_a") == team_id:
@@ -309,16 +341,31 @@ def _fixtures_for_player(
             opponent = team_by_id.get(opponent_id, {})
             rows.append(
                 {
+                    "fixture_id": fixture.get("fixture_id", fixture.get("id")),
                     "opponent": opponent.get("short_name") or fixture.get("team_h_short", "-"),
                     "opponent_name": opponent.get("name") or fixture.get("team_h_name", "Unknown"),
                     "home": False,
                     "opponent_strength": fixture.get(
                         "opponent_strength", opponent.get("strength_overall_home", 0)
                     ),
+                    **_fixture_metadata(fixture),
                 }
             )
 
     return rows
+
+
+def _fixture_metadata(fixture: dict[str, Any]) -> dict[str, Any]:
+    keys = ("status", "confirmed", "postponed", "rescheduled")
+    return {key: fixture[key] for key in keys if key in fixture}
+
+
+def _gameweek_metadata(
+    row: dict[str, Any], fixture_scenario: FixtureScenario | None
+) -> dict[str, Any]:
+    if fixture_scenario is None:
+        return row
+    return {**row, **fixture_scenario.metadata()}
 
 
 def _recent_baselines(history: pd.DataFrame | None) -> dict[Any, dict[str, float]]:

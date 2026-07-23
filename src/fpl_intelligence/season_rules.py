@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-RULES_SCHEMA_VERSION = "m6-v1"
+RULES_SCHEMA_VERSION = "m6-v3"
 DEFAULT_TRANSFER_HIT_COST = 4
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_SNAPSHOT_DIR = PROJECT_ROOT / "data" / "raw" / "snapshots"
@@ -30,6 +30,7 @@ PROMOTED_TEAMS_BY_SEASON: dict[str, tuple[str, ...]] = {
 HISTORICAL_RULE_SOURCE_URLS = {
     "2023-24": "https://www.premierleague.com/en/news/4026959",
     "2024-25": "https://www.premierleague.com/en/news/4058895",
+    "2025-26": "https://www.premierleague.com/en/news/4362027",
 }
 
 
@@ -52,6 +53,7 @@ class SeasonRules:
     max_free_transfers: int | None
     position_limits: dict[str, dict[str, int | None]]
     chips: list[dict[str, Any]]
+    chip_rules_version: str
     chip_reset_gameweek: int | None
     scoring: dict[str, Any]
     dc_rule_version: str
@@ -155,21 +157,115 @@ def _position_limits(bootstrap: Mapping[str, Any]) -> dict[str, dict[str, int | 
 def _normalized_chips(bootstrap: Mapping[str, Any]) -> list[dict[str, Any]]:
     chips = bootstrap.get("chips") or []
     normalized: list[dict[str, Any]] = []
+    occurrences: dict[str, int] = {}
     for chip in chips:
         if not isinstance(chip, Mapping):
             continue
+        name = str(chip.get("name") or "")
+        occurrences[name] = occurrences.get(name, 0) + 1
+        number = _safe_int(chip.get("number"))
+        if number in (None, 1) and occurrences[name] > 1:
+            number = occurrences[name]
         normalized.append(
             {
                 "id": _safe_int(chip.get("id")),
                 "name": chip.get("name"),
-                "number": _safe_int(chip.get("number")),
+                "number": number,
                 "start_event": _safe_int(chip.get("start_event")),
                 "stop_event": _safe_int(chip.get("stop_event")),
                 "chip_type": chip.get("chip_type"),
                 "overrides": chip.get("overrides", {}),
+                **_chip_behavior(str(chip.get("name") or "")),
             }
         )
     return normalized
+
+
+def _chip_behavior(name: str) -> dict[str, Any]:
+    """Return stable behavior metadata shared by live and historical chips."""
+
+    normalized_name = name.lower().replace("_", "").replace(" ", "")
+    if normalized_name == "wildcard":
+        return {
+            "duration_gameweeks": 1,
+            "permanent_transfers": True,
+            "free_hit_reversion": False,
+            "bench_points_included": False,
+            "captain_multiplier": 2,
+            "blocks_other_chips": False,
+        }
+    if normalized_name == "freehit":
+        return {
+            "duration_gameweeks": 1,
+            "permanent_transfers": False,
+            "free_hit_reversion": True,
+            "bench_points_included": False,
+            "captain_multiplier": 2,
+            "blocks_other_chips": False,
+        }
+    if normalized_name in {"bboost", "benchboost"}:
+        return {
+            "duration_gameweeks": 1,
+            "permanent_transfers": False,
+            "free_hit_reversion": False,
+            "bench_points_included": True,
+            "captain_multiplier": 2,
+            "blocks_other_chips": False,
+        }
+    if normalized_name in {"3xc", "triplecaptain"}:
+        return {
+            "duration_gameweeks": 1,
+            "permanent_transfers": False,
+            "free_hit_reversion": False,
+            "bench_points_included": False,
+            "captain_multiplier": 3,
+            "blocks_other_chips": False,
+        }
+    if normalized_name in {"assistantmanager", "assistant_mgr"}:
+        return {
+            "duration_gameweeks": 3,
+            "permanent_transfers": False,
+            "free_hit_reversion": False,
+            "bench_points_included": False,
+            "captain_multiplier": 2,
+            "blocks_other_chips": True,
+        }
+    return {
+        "duration_gameweeks": 1,
+        "permanent_transfers": False,
+        "free_hit_reversion": False,
+        "bench_points_included": False,
+        "captain_multiplier": 2,
+        "blocks_other_chips": False,
+    }
+
+
+def _chip_rules_version(season: str, chips: list[dict[str, Any]]) -> str:
+    names = {str(chip.get("name", "")).lower() for chip in chips}
+    second_half_names = {
+        str(chip.get("name", "")).lower()
+        for chip in chips
+        if chip.get("number") == 2
+    }
+    if "assistant_manager" in names:
+        return "chips_v2_assistant_manager_2024_25"
+    if len(second_half_names) >= 4:
+        return f"chips_v{4 if season == '2026-27' else 3}_double_set_{season.replace('-', '_')}"
+    return f"chips_v1_single_set_{season.replace('-', '_')}"
+
+
+def _chip_reset_gameweek(chips: list[dict[str, Any]]) -> int | None:
+    first_half = {
+        str(chip.get("name", "")).lower()
+        for chip in chips
+        if chip.get("number") == 1
+    }
+    second_half = {
+        str(chip.get("name", "")).lower()
+        for chip in chips
+        if chip.get("number") == 2
+    }
+    return 19 if len(first_half & second_half) >= 4 else None
 
 
 def _regime_versions(season: str, bootstrap: Mapping[str, Any]) -> tuple[str, str]:
@@ -201,6 +297,8 @@ def build_season_rules(
     dc_rule_version, bps_rule_version = _regime_versions(season, bootstrap)
     max_extra = _safe_int(settings.get("max_extra_free_transfers"))
     max_free = 1 + max_extra if max_extra is not None else None
+    chips = _normalized_chips(bootstrap)
+    chip_rules_version = _chip_rules_version(season, chips)
     manifest_metadata = build_snapshot_metadata(
         bootstrap,
         season=season,
@@ -211,7 +309,9 @@ def build_season_rules(
 
     return SeasonRules(
         season=season,
-        rules_version=f"{season}-{bps_rule_version}",
+        rules_version=(
+            f"{season}-{RULES_SCHEMA_VERSION}-{chip_rules_version}-{bps_rule_version}"
+        ),
         effective_from_gameweek=min_gw,
         effective_to_gameweek=max_gw,
         budget=(
@@ -229,8 +329,9 @@ def build_season_rules(
         max_extra_free_transfers=max_extra,
         max_free_transfers=max_free,
         position_limits=_position_limits(bootstrap),
-        chips=_normalized_chips(bootstrap),
-        chip_reset_gameweek=19 if season >= "2025-26" else None,
+        chips=chips,
+        chip_rules_version=chip_rules_version,
+        chip_reset_gameweek=_chip_reset_gameweek(chips),
         scoring=dict(scoring),
         dc_rule_version=dc_rule_version,
         bps_rule_version=bps_rule_version,
@@ -336,13 +437,28 @@ def validate_bootstrap_onboarding(
 
 
 def historical_regime(season: str) -> dict[str, str]:
-    """Return the explicit regime labels used by historical processing."""
+    """Return explicit regimes for locally supported historical seasons.
+
+    Future seasons must provide a loaded ``SeasonRules`` manifest instead of
+    inheriting a season-name heuristic.
+    """
 
     if season < "2025-26":
         return {"dc_rule_version": "pre_dc", "bps_rule_version": "bps_pre_2025_26"}
     if season == "2025-26":
         return {"dc_rule_version": "dc_v1", "bps_rule_version": "bps_v1_2025_26"}
-    return {"dc_rule_version": "dc_v1", "bps_rule_version": "bps_v2_2026_27"}
+    raise ValueError(
+        f"No season-name regime exists for {season}; load the versioned rules manifest."
+    )
+
+
+def regime_from_rules(rules: SeasonRules) -> dict[str, str]:
+    """Return DC/BPS regime labels from an explicit rules manifest."""
+
+    return {
+        "dc_rule_version": rules.dc_rule_version,
+        "bps_rule_version": rules.bps_rule_version,
+    }
 
 
 def build_historical_season_rules(season: str) -> SeasonRules:
@@ -355,8 +471,11 @@ def build_historical_season_rules(season: str) -> SeasonRules:
     current bootstrap payload was observed in that season.
     """
 
-    if season not in {"2023-24", "2024-25"}:
-        raise ValueError(f"Historical manifest helper only supports 2023-24 and 2024-25: {season}")
+    if season not in {"2023-24", "2024-25", "2025-26"}:
+        raise ValueError(
+            "Historical manifest helper only supports 2023-24, 2024-25, "
+            f"and 2025-26: {season}"
+        )
 
     def chip(name: str, number: int, start_event: int, stop_event: int) -> dict[str, Any]:
         return {
@@ -367,15 +486,28 @@ def build_historical_season_rules(season: str) -> SeasonRules:
             "stop_event": stop_event,
             "chip_type": "historical_contract",
             "overrides": {},
+            **_chip_behavior(name),
         }
 
-    chips = [
-        chip("wildcard", 1, 2, 19),
-        chip("wildcard", 2, 20, 38),
-        chip("freehit", 1, 2, 38),
-        chip("bboost", 1, 1, 38),
-        chip("3xc", 1, 1, 38),
-    ]
+    if season == "2025-26":
+        chips = [
+            chip("wildcard", 1, 2, 19),
+            chip("wildcard", 2, 20, 38),
+            chip("freehit", 1, 2, 19),
+            chip("freehit", 2, 20, 38),
+            chip("bboost", 1, 1, 19),
+            chip("bboost", 2, 20, 38),
+            chip("3xc", 1, 1, 19),
+            chip("3xc", 2, 20, 38),
+        ]
+    else:
+        chips = [
+            chip("wildcard", 1, 2, 19),
+            chip("wildcard", 2, 20, 38),
+            chip("freehit", 1, 2, 38),
+            chip("bboost", 1, 1, 38),
+            chip("3xc", 1, 1, 38),
+        ]
     if season == "2024-25":
         chips.append(chip("assistant_manager", 1, 24, 38))
 

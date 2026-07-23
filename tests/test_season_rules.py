@@ -12,6 +12,7 @@ from fpl_intelligence.season_rules import (
     build_snapshot_metadata,
     historical_regime,
     payload_hash,
+    regime_from_rules,
     save_immutable_snapshot,
     save_rules_manifest,
     validate_bootstrap_onboarding,
@@ -127,9 +128,15 @@ def test_2026_27_rules_capture_chips_bps_and_constraints():
     assert rules.max_free_transfers == 5
     assert len(rules.chips) == 8
     assert rules.chip_reset_gameweek == 19
+    assert rules.chip_rules_version == "chips_v4_double_set_2026_27"
     assert rules.dc_rule_version == "dc_v1"
     assert rules.bps_rule_version == "bps_v2_2026_27"
     assert rules.position_limits["DEF"]["squad_select"] == 5
+    by_name = {chip["name"]: chip for chip in rules.chips}
+    assert by_name["wildcard"]["permanent_transfers"] is True
+    assert by_name["freehit"]["free_hit_reversion"] is True
+    assert by_name["bboost"]["bench_points_included"] is True
+    assert by_name["3xc"]["captain_multiplier"] == 3
 
 
 def test_historical_regimes_are_explicit_and_separate():
@@ -142,19 +149,54 @@ def test_historical_regimes_are_explicit_and_separate():
         "dc_rule_version": "dc_v1",
         "bps_rule_version": "bps_v1_2025_26",
     }
-    assert historical_regime("2026-27")["bps_rule_version"] == "bps_v2_2026_27"
+    with pytest.raises(ValueError, match="load the versioned rules manifest"):
+        historical_regime("2026-27")
 
 
 def test_historical_manifests_cover_free_transfer_and_chip_eras():
     rules_2324 = build_historical_season_rules("2023-24")
     rules_2425 = build_historical_season_rules("2024-25")
+    rules_2526 = build_historical_season_rules("2025-26")
 
     assert rules_2324.max_free_transfers == 2
     assert rules_2425.max_free_transfers == 5
     assert len(rules_2324.chips) == 5
     assert len(rules_2425.chips) == 6
     assert any(chip["name"] == "assistant_manager" for chip in rules_2425.chips)
+    assistant_manager = next(
+        chip for chip in rules_2425.chips if chip["name"] == "assistant_manager"
+    )
+    assert assistant_manager["duration_gameweeks"] == 3
+    assert assistant_manager["blocks_other_chips"] is True
+    assert len(rules_2526.chips) == 8
+    assert rules_2526.chip_reset_gameweek == 19
+    assert rules_2526.chip_rules_version == "chips_v3_double_set_2025_26"
+    assert not any(chip["name"] == "assistant_manager" for chip in rules_2526.chips)
     assert rules_2324.scoring["status"] == "historical_contract_metadata"
+
+
+def test_future_regimes_are_read_from_explicit_manifests():
+    rules = build_season_rules(
+        bootstrap_fixture(),
+        season="2026-27",
+        source_url="https://example.test/bootstrap",
+    )
+
+    assert regime_from_rules(rules) == {
+        "dc_rule_version": "dc_v1",
+        "bps_rule_version": "bps_v2_2026_27",
+    }
+
+
+def test_all_supported_historical_seasons_have_chip_manifests(tmp_path: Path):
+    for season in ("2023-24", "2024-25", "2025-26"):
+        rules = build_historical_season_rules(season)
+        path = save_rules_manifest(rules, root=tmp_path)
+
+        assert path.exists()
+        assert rules.payload_hash
+        assert rules.schema_version == RULES_SCHEMA_VERSION
+        assert all("duration_gameweeks" in chip for chip in rules.chips)
 
 
 def test_onboarding_requires_promoted_2026_27_teams_and_valid_references():

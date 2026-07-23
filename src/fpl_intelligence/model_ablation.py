@@ -124,6 +124,24 @@ XG_XA_VARIANT = AblationVariant(
 )
 
 
+def run_component_benchmark(*args: Any, **kwargs: Any) -> SeasonBenchmarkResult:
+    """Run the M7 component projection candidate on the xG/xA feature set."""
+
+    kwargs["projection_mode"] = "components"
+    kwargs["feature_mode"] = "xg_xa"
+    return run_season_benchmark(*args, **kwargs)
+
+
+COMPONENT_VARIANT = AblationVariant(
+    name="baseline+xg_xa+components",
+    description=(
+        "M7 component projection layered on the lagged xG/xA variant; "
+        "rule-aware scoring and existing transfer/captaincy logic retained."
+    ),
+    runner=run_component_benchmark,
+)
+
+
 def run_dc_benchmark(*args: Any, **kwargs: Any) -> SeasonBenchmarkResult:
     """Run the DC feature mode when a DC-applicable season is supplied."""
     kwargs["feature_mode"] = "dc"
@@ -145,7 +163,13 @@ def default_registry() -> AblationRegistry:
     """Return a fresh registry so callers can add variants without global state."""
 
     return AblationRegistry(
-        (BASELINE_VARIANT, MINUTES_V2_VARIANT, XG_XA_VARIANT, DC_VARIANT)
+        (
+            BASELINE_VARIANT,
+            MINUTES_V2_VARIANT,
+            XG_XA_VARIANT,
+            COMPONENT_VARIANT,
+            DC_VARIANT,
+        )
     )
 
 
@@ -293,11 +317,13 @@ def run_multi_season_ablation(
 
     for variant in variants:
         prediction_cache: dict[
-            tuple[str, int, str, str, str], tuple[pd.DataFrame, pd.DataFrame]
+            tuple[str, int, str, str, str, str], tuple[pd.DataFrame, pd.DataFrame]
         ] = {}
-        captain_prediction_cache: dict[tuple[str, int], pd.DataFrame] = {}
+        captain_prediction_cache: dict[
+            tuple[str, int, str, str, str], pd.DataFrame
+        ] = {}
         future_prediction_cache: dict[
-            tuple[str, int, str, str, str], dict[int, pd.DataFrame]
+            tuple[str, int, str, str, str, str], dict[int, pd.DataFrame]
         ] = {}
         for season in seasons:
             dc_status, dc_reason = dc_data_state(players, season, variant)

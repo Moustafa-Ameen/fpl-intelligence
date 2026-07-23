@@ -4,6 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from fpl_intelligence.component_features import (
+    COMPONENT_LAG_FEATURES,
+    COMPONENT_TARGET_COLUMNS,
+)
 from fpl_intelligence.season_rules import historical_regime
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +23,7 @@ DC_COLUMNS = [
     "recoveries",
     "tackles",
 ]
-ADVANCED_STAT_COLUMNS = XG_XA_COLUMNS + DC_COLUMNS
+ADVANCED_STAT_COLUMNS = XG_XA_COLUMNS + DC_COLUMNS + list(COMPONENT_TARGET_COLUMNS)
 
 SOURCE_FILES = {
     season: {
@@ -207,6 +211,30 @@ def add_rolling_features(players: pd.DataFrame) -> pd.DataFrame:
             )
             columns_to_fill.append(feature_name)
 
+    component_columns_present = list(COMPONENT_TARGET_COLUMNS)
+    for source_column in component_columns_present:
+        if source_column not in sorted_players:
+            sorted_players[source_column] = float("nan")
+        else:
+            sorted_players[source_column] = pd.to_numeric(
+                sorted_players[source_column], errors="coerce"
+            )
+    component_prior = sorted_players.groupby(
+        ["season", "player_id"], sort=False
+    )[component_columns_present].shift(1)
+    component_grouped = component_prior.groupby(
+        [sorted_players["season"], sorted_players["player_id"]], sort=False
+    )
+    for window in (1, 3, 5, 8):
+        rolling_components = component_grouped[component_columns_present].rolling(
+            window=window, min_periods=1
+        ).sum()
+        rolling_components = rolling_components.reset_index(level=[0, 1], drop=True)
+        for source_column in component_columns_present:
+            feature_name = f"{source_column}_last_{window}"
+            sorted_players[feature_name] = rolling_components[source_column]
+            columns_to_fill.append(feature_name)
+
 
     for window in (1, 3, 5, 8):
         rolling_xgi = (
@@ -269,6 +297,9 @@ def aggregate_fixture_rows_to_gameweeks(fixture_rows: pd.DataFrame) -> pd.DataFr
             opponent_team=("opponent_team", combine_unique_text),
             opponent_strength=("opponent_strength", "mean"),
             home_or_away=("home_or_away", combine_home_away),
+            team_goals=("team_goals", sum_with_min_count),
+            opponent_goals=("opponent_goals", sum_with_min_count),
+            team_clean_sheet=("team_clean_sheet", "min"),
             selected_by_percent=("selected_by_percent", "max"),
             minutes=("minutes", "sum"),
             total_points=("total_points", "sum"),
@@ -285,6 +316,10 @@ def aggregate_fixture_rows_to_gameweeks(fixture_rows: pd.DataFrame) -> pd.DataFr
             dc_rule_version=("dc_rule_version", "first"),
             bps_rule_version=("bps_rule_version", "first"),
             dc_data_available=("dc_data_available", "max"),
+            **{
+                column: (column, sum_with_min_count)
+                for column in COMPONENT_TARGET_COLUMNS
+            },
         )
         .sort_values(["season", "gameweek", "player_id"])
         .reset_index(drop=True)
@@ -326,6 +361,22 @@ def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFra
         else row["strength_overall_home"],
         axis=1,
     )
+    # These are required for chip-era scoring context.  Historical exports
+    # predating score retention stay explicitly missing rather than becoming
+    # false clean sheets or zero-goal fixtures.
+    for column in ("team_h_score", "team_a_score"):
+        if column not in merged:
+            merged[column] = pd.NA
+        merged[column] = pd.to_numeric(merged[column], errors="coerce")
+    merged["team_goals"] = merged["team_h_score"].where(
+        merged["was_home"], merged["team_a_score"]
+    )
+    merged["opponent_goals"] = merged["team_a_score"].where(
+        merged["was_home"], merged["team_h_score"]
+    )
+    merged["team_clean_sheet"] = (merged["opponent_goals"] == 0).where(
+        merged["opponent_goals"].notna(), pd.NA
+    )
     merged["next_gameweek_points"] = merged["total_points"]
 
     columns = [
@@ -340,6 +391,9 @@ def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFra
         "opponent_team",
         "opponent_strength",
         "home_or_away",
+        "team_goals",
+        "opponent_goals",
+        "team_clean_sheet",
         "selected_by_percent",
         "minutes",
         "total_points",
@@ -347,6 +401,7 @@ def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFra
         "expected_goals",
         "expected_assists",
         *DC_COLUMNS,
+        *COMPONENT_TARGET_COLUMNS,
         "dc_rule_version",
         "bps_rule_version",
         "dc_data_available",
@@ -386,6 +441,9 @@ def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFra
         "opponent_team",
         "opponent_strength",
         "home_or_away",
+        "team_goals",
+        "opponent_goals",
+        "team_clean_sheet",
         "selected_by_percent",
         "selected_by_percent_before_deadline",
         "market_snapshot_available",
@@ -395,6 +453,8 @@ def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFra
         *XG_XA_COLUMNS,
         *[f"{column}_last_{window}" for column in XG_XA_COLUMNS for window in (1, 3, 5, 8)],
         *[f"xgi_per_90_last_{window}" for window in (1, 3, 5, 8)],
+        *COMPONENT_LAG_FEATURES,
+        *COMPONENT_TARGET_COLUMNS,
         "clearances_blocks_interceptions",
         "defensive_contribution",
         "recoveries",

@@ -257,6 +257,51 @@ export interface ChipTipAlert {
   metrics: Record<string, number | boolean>;
 }
 
+export interface ChipAlternative {
+  gameweek: number;
+  chip_key: string;
+  chip: string;
+  expected_immediate_gain: number;
+  expected_horizon_gain: number;
+  reason: string;
+}
+
+export interface ChipRecommendation {
+  action: "use" | "save";
+  chip: string | null;
+  chip_key: string | null;
+  chip_number: number | null;
+  gameweek: number;
+  expected_immediate_gain: number;
+  expected_horizon_gain: number;
+  expected_gameweek_points: number;
+  no_chip_gameweek_points: number;
+  expected_horizon_points: number;
+  no_chip_horizon_points: number;
+  uncertainty_penalty: number;
+  downside_range: { low: number; high: number };
+  confidence: "low" | "medium" | "high";
+  ordinary_transfer_allowed: boolean;
+  ordinary_transfer_applied: boolean;
+  reason: string;
+  best_alternative: ChipAlternative | null;
+}
+
+export interface ChipCounterfactual {
+  chip_key: string;
+  chip_number: number | null;
+  legal: boolean;
+  selected: boolean;
+  expected_gameweek_points: number;
+  no_chip_gameweek_points: number;
+  expected_horizon_points: number;
+  no_chip_horizon_points: number;
+  expected_horizon_gain: number;
+  future_opportunity_cost: number;
+  uncertainty_penalty: number;
+  reason: string;
+}
+
 export interface ChipTipsResponse {
   status: ChipTipsStatus;
   team_id?: number | null;
@@ -269,9 +314,21 @@ export interface ChipTipsResponse {
   target_gameweek?: number;
   message: string;
   alerts: ChipTipAlert[];
+  recommendation?: ChipRecommendation;
+  counterfactuals?: ChipCounterfactual[];
+  alternatives?: ChipAlternative[];
+  remaining_chips?: string[];
+  used_chips?: string[];
+  explanatory_signals?: Record<string, unknown>;
   baseline_gameweeks?: number | number[];
   minimum_baseline_gameweeks?: number;
   model?: string;
+  model_version?: string;
+  chip_mode?: string;
+  rules_version?: string;
+  rules_payload_hash?: string;
+  data_cutoff?: string | null;
+  generated_at?: string;
 }
 
 export type ChipAvailabilityStatus = "used" | "available" | "not_yet_available" | "expired";

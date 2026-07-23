@@ -150,8 +150,9 @@ def load_historical_player_gameweeks(path: Path = HISTORICAL_PLAYER_GW_PATH) -> 
 
 def build_preprocessor(feature_columns: list[str] | None = None) -> ColumnTransformer:
     selected_features = feature_columns or FEATURE_COLUMNS
-    numeric_feature_pool = NUMERIC_FEATURES + XG_XA_FEATURES + DC_FEATURES
-    numeric_features = [feature for feature in selected_features if feature in numeric_feature_pool]
+    numeric_features = [
+        feature for feature in selected_features if feature not in CATEGORICAL_FEATURES
+    ]
     categorical_features = [
         feature for feature in selected_features if feature in CATEGORICAL_FEATURES
     ]
