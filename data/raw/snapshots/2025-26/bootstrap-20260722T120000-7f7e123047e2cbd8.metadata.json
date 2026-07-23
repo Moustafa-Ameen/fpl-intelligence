@@ -1,0 +1,8 @@
+{
+  "cutoff_at": "2026-07-22T12:00:00Z",
+  "payload_hash": "7f7e123047e2cbd87402c9508a442fe47efddc4f78666286dde039af972f3fe0",
+  "retrieved_at": "2026-07-22T12:00:00Z",
+  "schema_version": "m6-v1",
+  "season": "2025-26",
+  "source_url": "https://fantasy.premierleague.com/api/bootstrap-static/"
+}

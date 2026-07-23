@@ -5,6 +5,7 @@ __pycache__/
 .playwright-cli/
 *.pyc
 *.egg-info/
+*.zip
 
 data/raw/*.json
 data/raw/historical/
