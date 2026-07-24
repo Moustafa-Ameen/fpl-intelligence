@@ -20,6 +20,10 @@ from fpl_intelligence.component_features import (
     COMPONENT_LAG_FEATURES,
     COMPONENT_MODEL_COLUMNS,
 )
+from fpl_intelligence.projection_distributions import (
+    ProjectionDistribution,
+    build_poisson_component_distribution,
+)
 from fpl_intelligence.season_rules import historical_regime
 from fpl_intelligence.step4_models import build_preprocessor, feature_columns_for_mode
 
@@ -51,9 +55,7 @@ def _position_code(value: Any) -> str:
     return text
 
 
-def _expected_appearance_points(
-    minutes_probabilities: np.ndarray | None, count: int
-) -> np.ndarray:
+def _expected_appearance_points(minutes_probabilities: np.ndarray | None, count: int) -> np.ndarray:
     if minutes_probabilities is None:
         return np.ones(count, dtype=float)
     probabilities = np.asarray(minutes_probabilities, dtype=float)
@@ -121,6 +123,8 @@ class ComponentProjectionModel:
     regime_status: str
     multi_model: Pipeline | None = None
     version: str = COMPONENT_PROJECTION_VERSION
+    target_dc_rule_version: str | None = None
+    training_dc_rule_versions: tuple[str, ...] = ()
 
     def predict_components(self, features: pd.DataFrame) -> pd.DataFrame:
         output = pd.DataFrame(index=features.index)
@@ -139,6 +143,28 @@ class ComponentProjectionModel:
                 values = model.predict(features[self.feature_columns])
             output[f"expected_{component}"] = np.maximum(np.asarray(values, dtype=float), 0.0)
         return output
+
+    def predict_distribution(
+        self,
+        features: pd.DataFrame,
+        *,
+        coverage: float = 0.8,
+        data_cutoff: str = "unknown",
+    ) -> ProjectionDistribution:
+        """Return component expectations with explicit Poisson intervals.
+
+        The intervals are an unadjusted event-count baseline until a declared
+        held-out calibration sample is supplied. Keeping that distinction in
+        ``interval_method`` prevents uncertainty from being presented as
+        calibrated merely because intervals exist.
+        """
+
+        return build_poisson_component_distribution(
+            self.predict_components(features),
+            coverage=coverage,
+            data_cutoff=data_cutoff,
+            model_version=self.version,
+        )
 
     def predict_expected_points(
         self,
@@ -165,6 +191,7 @@ def fit_component_projection_model(
     *,
     feature_mode: str = "xg_xa",
     target_bps_rule_version: str | None = None,
+    target_dc_rule_version: str | None = None,
 ) -> ComponentProjectionModel:
     """Fit one point-in-time component model per scoring component."""
 
@@ -183,12 +210,25 @@ def fit_component_projection_model(
         else:
             regime_status = "matched_regime"
 
+    if target_dc_rule_version is not None and "dc_rule_version" in matching.columns:
+        dc_matching = matching[matching["dc_rule_version"] == target_dc_rule_version]
+        if dc_matching.empty:
+            regime_status = "prior_regime_fallback"
+        else:
+            matching = dc_matching
+            if regime_status == "unrestricted":
+                regime_status = "matched_regime"
+
     training_regimes = tuple(
         sorted(
             str(value)
-            for value in matching.get(
-                "bps_rule_version", pd.Series(dtype=str)
-            ).dropna().unique()
+            for value in matching.get("bps_rule_version", pd.Series(dtype=str)).dropna().unique()
+        )
+    )
+    training_dc_regimes = tuple(
+        sorted(
+            str(value)
+            for value in matching.get("dc_rule_version", pd.Series(dtype=str)).dropna().unique()
         )
     )
     models: dict[str, Pipeline | None] = {}
@@ -232,6 +272,8 @@ def fit_component_projection_model(
         training_bps_rule_versions=training_regimes,
         regime_status=regime_status,
         multi_model=multi_model,
+        target_dc_rule_version=target_dc_rule_version,
+        training_dc_rule_versions=training_dc_regimes,
     )
 
 

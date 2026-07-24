@@ -43,6 +43,39 @@ still experimental and provisional; M9 has not started.
 - No-chip controls remained unchanged: 2,119 realistic points in 2023/24 and
   1,903 in 2024/25.
 
+## M8.6.1 Persistence Verification
+
+The canonical multi-season ablation runner now forwards `chip_mode` to each
+variant and persists both season summaries and per-Gameweek decision rows. The
+decision-row writer also normalizes the season and strategy keys for synthetic
+or historical result frames, so a persisted summary cannot silently lack its
+audit companion.
+
+Verification at commit `8b69e8a842c62918d541879b3dcf6c837a8d759e`:
+
+- 2023/24 beam track: 2,337 realistic points, 34 transfers, five chips.
+- 2024/25 beam track: 2,489 realistic points, 30 transfers, five chips.
+- Two persisted chip-aware summary rows and 76 persisted decision rows.
+- All 76 decision rows contain counterfactual payloads.
+- No duplicate run/season/strategy/Gameweek decision keys.
+- No-chip controls still reconcile to 2,119 and 1,903 realistic points.
+- Persistence-focused and regression tests pass; Ruff is clean.
+
+### Explicit 2025/26 validation
+
+The 2025/26 season was then run as an explicit deterministic-transfer beam
+track using its season-specific rules manifest. The persisted result was:
+
+- 2,378 hindsight points and 2,192 realistic points.
+- 32 transfers, no hits, and all eight legal chips used.
+- 38 decision rows with no duplicate Gameweeks or missing counterfactuals.
+- First-half chip slots used in GW1-GW4 and second-half slots in GW20-GW23.
+- No chip used in both GW19 and GW20, and no point-in-time lookahead violations.
+- Rules version `2025-26-m6-v3-chips_v3_double_set_2025_26-bps_v1_2025_26`.
+
+The 2025/26 contract reflects the official two-set, eight-chip season, the
+2025/26 Defensive Contributions rules, and the separate 2025/26 BPS regime.
+
 ## Acceptance interpretation
 
 The correctness and runtime gates pass. The performance-promotion gate does

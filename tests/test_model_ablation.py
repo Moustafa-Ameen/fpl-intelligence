@@ -116,6 +116,41 @@ def test_ablation_runner_persists_one_row_per_result_combination(tmp_path: Path)
     assert history[["run_id", "variant_name", "season", "strategy_name"]].duplicated().sum() == 0
     assert result.run_id == "suite-1"
     assert result.history_path == history_path
+    assert result.decision_history_path == history_path.with_name("history_decisions.csv")
+    decision_history = pd.read_csv(result.decision_history_path)
+    assert len(decision_history) == 2
+    assert decision_history["run_id"].eq("suite-1").all()
+    assert decision_history["variant_name"].eq("fake").all()
+
+
+def test_ablation_runner_forwards_chip_mode_to_persisted_variants(tmp_path: Path):
+    seen: dict[str, str] = {}
+
+    def runner(players, season, strategy, **kwargs):
+        seen["chip_mode"] = kwargs["chip_mode"]
+        return _fake_ablation_result(season, strategy)
+
+    registry = AblationRegistry(
+        (
+            AblationVariant(
+                name="beam",
+                description="Synthetic beam persistence test variant.",
+                runner=runner,
+            ),
+        )
+    )
+    run_multi_season_ablation(
+        _fake_ablation_players(),
+        seasons=("2023-24",),
+        strategies=(NoTransfersStrategy(),),
+        registry=registry,
+        variant_names=("beam",),
+        persist=True,
+        history_path=tmp_path / "history.csv",
+        chip_mode="beam_search",
+    )
+
+    assert seen["chip_mode"] == "beam_search"
 
 
 def test_validation_status_update_is_scoped_to_run_id(tmp_path: Path):

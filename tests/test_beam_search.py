@@ -100,6 +100,61 @@ def test_beam_search_is_reproducible_for_identical_inputs():
     assert first.reason == second.reason
 
 
+def test_horizon_hit_policy_selects_a_worthwhile_four_point_hit():
+    squad = _squad()
+    upgrade = squad.iloc[[5]].copy()
+    upgrade["player_id"] = 100
+    upgrade["player_name"] = "Future Upgrade"
+    upgrade["team"] = "New Team"
+    upgrade["expected_points_adjusted"] = 2.0
+    predictions = pd.concat([squad, upgrade], ignore_index=True)
+    future = predictions.copy()
+    future.loc[future["player_id"] == 100, "expected_points_adjusted"] = 12.0
+    rules = build_historical_season_rules("2025-26")
+    chip_state = ChipState(
+        season="2025-26",
+        rules_version=rules.rules_version,
+        remaining=(),
+    )
+
+    current_policy = DeterministicBeamPlanner(
+        beam_width=4,
+        horizon=1,
+        max_transfers=8,
+        hit_policy="current_gw",
+    ).decide(
+        gameweek=2,
+        squad=squad,
+        bank=0.0,
+        free_transfers=0,
+        chip_state=chip_state,
+        predictions=predictions,
+        future_predictions={3: future},
+        rules=rules,
+    )
+    horizon_policy = DeterministicBeamPlanner(
+        beam_width=4,
+        horizon=1,
+        max_transfers=8,
+        hit_policy="horizon_value",
+    ).decide(
+        gameweek=2,
+        squad=squad,
+        bank=0.0,
+        free_transfers=0,
+        chip_state=chip_state,
+        predictions=predictions,
+        future_predictions={3: future},
+        rules=rules,
+    )
+
+    assert current_policy.transfer.made is False
+    assert horizon_policy.transfer.incoming_id == 100
+    assert horizon_policy.transfer.hit_cost == 4
+    assert horizon_policy.transfer_expected_horizon_net_gain > 0
+    assert horizon_policy.hit_policy == "horizon_value"
+
+
 def test_wildcard_horizon_aggregation_values_future_fixture_swing():
     current = _squad().copy()
     future_player = current.iloc[[5]].copy()
