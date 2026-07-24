@@ -34,6 +34,13 @@ import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
+from fpl_intelligence.availability import (
+    AVAILABILITY_FEATURE_COLUMNS,
+    M9_MINUTES_FEATURE_COLUMNS,
+    AvailabilityEvent,
+    add_m9_historical_features,
+    build_availability_features,
+)
 from fpl_intelligence.backtest_transfer_strategy import (
     DEFAULT_GAIN_THRESHOLD,
     FREE_TRANSFER_CAP,
@@ -48,7 +55,7 @@ from fpl_intelligence.backtest_transfer_strategy import (
     select_starting_xi,
     validate_squad,
 )
-from fpl_intelligence.beam_search import DeterministicBeamPlanner
+from fpl_intelligence.beam_search import HIT_POLICIES, DeterministicBeamPlanner
 from fpl_intelligence.chip_simulation import (
     CHIP_MODE_BASELINE,
     CHIP_MODE_BEAM,
@@ -127,6 +134,8 @@ HISTORY_COLUMNS = [
     "chips_used",
     "chip_points",
     "rules_version",
+    "minutes_mode",
+    "hit_policy",
 ]
 
 
@@ -200,6 +209,8 @@ class SeasonBenchmarkResult:
     chip_mode: str = CHIP_MODE_NONE
     chip_points: float = 0.0
     chips_used: int = 0
+    minutes_mode: str = "binary"
+    hit_policy: str = "current_gw"
 
 
 @dataclass(frozen=True)
@@ -248,6 +259,92 @@ def get_training_data_for_season(
     return training
 
 
+def _minutes_feature_columns(minutes_mode: str, feature_mode: str) -> list[str]:
+    """Return the feature set for the selected minutes candidate."""
+
+    columns = list(feature_columns_for_mode(feature_mode))
+    if minutes_mode == "availability_role":
+        columns.extend(M9_MINUTES_FEATURE_COLUMNS)
+    return columns
+
+
+def _fit_start_probability_model(
+    training: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[Pipeline | None, float]:
+    """Fit a start-probability model, with a safe prior for one-class windows."""
+
+    if "starts" in training:
+        start_target = (
+            pd.to_numeric(training["starts"], errors="coerce").fillna(0) > 0
+        ).astype(int)
+    else:
+        start_target = (
+            pd.to_numeric(training["minutes"], errors="coerce").fillna(0) >= 60
+        ).astype(int)
+    fallback = float(start_target.mean()) if len(start_target) else 0.5
+    if start_target.nunique() < 2:
+        return None, fallback
+    model = build_minutes_classifier(feature_columns)
+    model.fit(training[feature_columns], start_target)
+    return model, fallback
+
+
+def _start_probability(
+    target: pd.DataFrame,
+    model: Pipeline | None,
+    fallback: float,
+    feature_columns: list[str],
+) -> np.ndarray:
+    if model is None:
+        return np.full(len(target), fallback, dtype=float)
+    return model.predict_proba(target[feature_columns])[:, 1]
+
+
+def _add_role_probability_outputs(
+    target: pd.DataFrame,
+    band_probabilities: np.ndarray,
+    start_probabilities: np.ndarray,
+) -> pd.DataFrame:
+    """Expose the M9 start/substitute/60+ probability contract."""
+
+    target["probability_start"] = np.clip(start_probabilities, 0.0, 1.0)
+    target["probability_substitute"] = np.clip(band_probabilities[:, 1], 0.0, 1.0)
+    target["probability_60_plus_minutes"] = np.clip(band_probabilities[:, 2], 0.0, 1.0)
+    target["expected_minutes_if_start"] = (
+        target["minutes_mean_last_5"] if "minutes_mean_last_5" in target else 0.0
+    ).clip(lower=0.0, upper=90.0)
+    return target
+
+
+def _apply_live_availability_features(
+    target: pd.DataFrame,
+    events: Iterable[AvailabilityEvent] | None,
+    cutoff: datetime | str | None,
+    target_gameweek: int,
+) -> pd.DataFrame:
+    """Overlay source-attributed live events on target rows only."""
+
+    if events is None:
+        return target
+    if cutoff is None:
+        raise ValueError("availability_cutoff is required when availability_events are supplied")
+    features = build_availability_features(
+        target["player_id"].tolist(),
+        events,
+        cutoff=cutoff,
+        target_gameweek=target_gameweek,
+    )
+    availability_columns = [
+        column for column in AVAILABILITY_FEATURE_COLUMNS if column in features
+    ]
+    return target.drop(columns=availability_columns, errors="ignore").merge(
+        features[["player_id", *availability_columns]],
+        on="player_id",
+        how="left",
+    )
+
+
 def _component_target_predictions(
     training: pd.DataFrame,
     target: pd.DataFrame,
@@ -258,6 +355,7 @@ def _component_target_predictions(
     """Apply M7 component scoring to one target gameweek."""
 
     component_columns = component_feature_columns(feature_mode)
+    minutes_feature_columns = _minutes_feature_columns(minutes_mode, feature_mode)
     target_bps_rule_version = (
         str(target["bps_rule_version"].iloc[0])
         if "bps_rule_version" in target.columns and not target.empty
@@ -268,15 +366,21 @@ def _component_target_predictions(
         feature_mode=feature_mode,
         target_bps_rule_version=target_bps_rule_version,
     )
+    start_model: Pipeline | None = None
+    start_fallback = 0.5
+    if minutes_mode == "availability_role":
+        start_model, start_fallback = _fit_start_probability_model(
+            training, minutes_feature_columns
+        )
 
     if minutes_mode == "binary":
-        minutes_model = build_minutes_classifier(feature_columns_for_mode(feature_mode))
-        minutes_features = feature_columns_for_mode(feature_mode)
+        minutes_model = build_minutes_classifier(minutes_feature_columns)
+        minutes_features = minutes_feature_columns
         minutes_model.fit(
             training[minutes_features], (training["minutes"] >= 60).astype(int)
         )
         probability_60_plus = minutes_model.predict_proba(
-            target[feature_columns_for_mode(feature_mode)]
+            target[minutes_feature_columns]
         )[:, 1]
         band_probabilities = np.column_stack(
             [1.0 - probability_60_plus, np.zeros(len(target)), probability_60_plus]
@@ -284,10 +388,10 @@ def _component_target_predictions(
         predicted_bands = band_probabilities.argmax(axis=1)
     else:
         minutes_band_model = fit_minutes_band_conditional_model(
-            training, feature_columns_for_mode(feature_mode)
+            training, minutes_feature_columns
         )
         band_probabilities = minutes_band_model.predict_proba(
-            target[feature_columns_for_mode(feature_mode)]
+            target[minutes_feature_columns]
         )
         probability_60_plus = band_probabilities[:, 2]
         predicted_bands = band_probabilities.argmax(axis=1)
@@ -317,6 +421,17 @@ def _component_target_predictions(
     output["component_training_bps_rule_versions"] = ",".join(
         component_model.training_bps_rule_versions
     )
+    if minutes_mode == "availability_role":
+        _add_role_probability_outputs(
+            output,
+            band_probabilities,
+            _start_probability(
+                target,
+                start_model,
+                start_fallback,
+                minutes_feature_columns,
+            ),
+        )
     output["model"] = "Component Projection"
     return output
 
@@ -329,22 +444,38 @@ def train_gameweek_predictions(
     minutes_mode: str = "binary",
     feature_mode: str = "baseline",
     projection_mode: str = DEFAULT_PROJECTION_MODE,
+    availability_events: Iterable[AvailabilityEvent] | None = None,
+    availability_cutoff: datetime | str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train and predict one target gameweek using an expanding time window."""
 
     if model_name not in MODEL_BUILDERS:
         raise ValueError(f"Unknown model {model_name!r}; choose from {', '.join(MODEL_BUILDERS)}")
-    if minutes_mode not in {"binary", "conditional_bands"}:
-        raise ValueError("minutes_mode must be 'binary' or 'conditional_bands'")
+    if minutes_mode not in {"binary", "conditional_bands", "availability_role"}:
+        raise ValueError(
+            "minutes_mode must be 'binary', 'conditional_bands', or 'availability_role'"
+        )
     if projection_mode not in PROJECTION_MODES:
         raise ValueError(
             f"projection_mode must be one of {', '.join(PROJECTION_MODES)}"
         )
+    if minutes_mode == "availability_role" and not set(M9_MINUTES_FEATURE_COLUMNS).issubset(
+        players.columns
+    ):
+        players = add_m9_historical_features(players)
     feature_columns = feature_columns_for_mode(feature_mode)
+    minutes_feature_columns = _minutes_feature_columns(minutes_mode, feature_mode)
     training = get_training_data_for_season(players, season, gameweek)
     target = players[(players["season"] == season) & (players["gameweek"] == gameweek)].copy()
     if target.empty:
         raise ValueError(f"No target rows for {season} GW{gameweek}")
+    if minutes_mode == "availability_role":
+        target = _apply_live_availability_features(
+            target,
+            availability_events,
+            availability_cutoff,
+            gameweek,
+        )
 
     if training.empty:
         # The earliest available season has no prior season file. GW1 therefore
@@ -357,6 +488,9 @@ def train_gameweek_predictions(
         target["probability_0_minutes"] = 0.0
         target["probability_1_59_minutes"] = 0.0
         target["probability_60_plus_minutes_v2"] = 1.0
+        target["probability_start"] = 0.5
+        target["probability_substitute"] = 0.0
+        target["expected_minutes_if_start"] = 90.0
         target["predicted_minutes_band"] = 2
         target["minutes_model_mode"] = minutes_mode
         target["feature_mode"] = feature_mode
@@ -380,12 +514,12 @@ def train_gameweek_predictions(
 
         target["predicted_points"] = points_model.predict(target[feature_columns])
         if minutes_mode == "binary":
-            minutes_model = build_minutes_classifier(feature_columns)
+            minutes_model = build_minutes_classifier(minutes_feature_columns)
             minutes_model.fit(
-                training[feature_columns], (training["minutes"] >= 60).astype(int)
+                training[minutes_feature_columns], (training["minutes"] >= 60).astype(int)
             )
             target["probability_60_plus_minutes"] = minutes_model.predict_proba(
-                target[feature_columns]
+                target[minutes_feature_columns]
             )[:, 1]
             target["expected_points_adjusted"] = (
                 target["predicted_points"] * target["probability_60_plus_minutes"]
@@ -394,22 +528,36 @@ def train_gameweek_predictions(
             # This is intentionally independent benchmark logic: it fits its own
             # three-class model and band-specific point estimators for each target GW.
             minutes_band_model = fit_minutes_band_conditional_model(
-                training, feature_columns
+                training, minutes_feature_columns
             )
             band_probabilities = minutes_band_model.predict_proba(
-                target[feature_columns]
+                target[minutes_feature_columns]
             )
             target["probability_0_minutes"] = band_probabilities[:, 0]
             target["probability_1_59_minutes"] = band_probabilities[:, 1]
             target["probability_60_plus_minutes_v2"] = band_probabilities[:, 2]
             target["probability_60_plus_minutes"] = band_probabilities[:, 2]
             target["predicted_minutes_band"] = minutes_band_model.predict(
-                target[feature_columns]
+                target[minutes_feature_columns]
             )
             target["expected_points_adjusted"] = (
-                minutes_band_model.predict_expected_points(target[feature_columns])
+                minutes_band_model.predict_expected_points(target[minutes_feature_columns])
                 .clip(0.0)
             )
+            if minutes_mode == "availability_role":
+                start_model, start_fallback = _fit_start_probability_model(
+                    training, minutes_feature_columns
+                )
+                _add_role_probability_outputs(
+                    target,
+                    band_probabilities,
+                    _start_probability(
+                        target,
+                        start_model,
+                        start_fallback,
+                        minutes_feature_columns,
+                    ),
+                )
     target["minutes_model_mode"] = minutes_mode
     target["feature_mode"] = feature_mode
     target["projection_mode"] = projection_mode
@@ -475,6 +623,7 @@ def _point_in_time_future_frame(
             for feature in component_feature_columns(feature_mode)
             if feature not in {"home_or_away", "opponent_strength", "position"}
         ],
+        *M9_MINUTES_FEATURE_COLUMNS,
     ):
         if column in snapshot_by_id.columns:
             safe_by_id[column] = snapshot_by_id[column].reindex(safe_by_id.index)
@@ -496,6 +645,8 @@ def train_future_gameweek_predictions(
     feature_mode: str = "baseline",
     projection_mode: str = DEFAULT_PROJECTION_MODE,
     horizons: Sequence[int] = (1, 2),
+    availability_events: Iterable[AvailabilityEvent] | None = None,
+    availability_cutoff: datetime | str | None = None,
 ) -> dict[int, pd.DataFrame]:
     """Forecast t+1/t+2 using only information available before gameweek t."""
 
@@ -503,19 +654,28 @@ def train_future_gameweek_predictions(
         raise ValueError("future horizons must be between 1 and 8 gameweeks")
     if model_name not in MODEL_BUILDERS:
         raise ValueError(f"Unknown model {model_name!r}; choose from {', '.join(MODEL_BUILDERS)}")
-    if minutes_mode not in {"binary", "conditional_bands"}:
-        raise ValueError("minutes_mode must be 'binary' or 'conditional_bands'")
+    if minutes_mode not in {"binary", "conditional_bands", "availability_role"}:
+        raise ValueError(
+            "minutes_mode must be 'binary', 'conditional_bands', or 'availability_role'"
+        )
     if projection_mode not in PROJECTION_MODES:
         raise ValueError(
             f"projection_mode must be one of {', '.join(PROJECTION_MODES)}"
         )
+    if minutes_mode == "availability_role" and not set(M9_MINUTES_FEATURE_COLUMNS).issubset(
+        players.columns
+    ):
+        players = add_m9_historical_features(players)
     feature_columns = feature_columns_for_mode(feature_mode)
+    minutes_feature_columns = _minutes_feature_columns(minutes_mode, feature_mode)
     training = get_training_data_for_season(players, season, decision_gameweek)
     output: dict[int, pd.DataFrame] = {}
 
     points_model: Pipeline | None = None
     minutes_model: Pipeline | None = None
     minutes_band_model: Any | None = None
+    start_model: Pipeline | None = None
+    start_fallback = 0.5
     component_model: Any | None = None
     if not training.empty:
         if projection_mode == "components":
@@ -527,13 +687,17 @@ def train_future_gameweek_predictions(
             points_model = MODEL_BUILDERS[model_name](feature_columns)
             points_model.fit(training[feature_columns], training["next_gameweek_points"])
             if minutes_mode == "binary":
-                minutes_model = build_minutes_classifier(feature_columns)
+                minutes_model = build_minutes_classifier(minutes_feature_columns)
                 minutes_model.fit(
-                    training[feature_columns], (training["minutes"] >= 60).astype(int)
+                    training[minutes_feature_columns], (training["minutes"] >= 60).astype(int)
                 )
             else:
                 minutes_band_model = fit_minutes_band_conditional_model(
-                    training, feature_columns
+                    training, minutes_feature_columns
+                )
+            if minutes_mode == "availability_role":
+                start_model, start_fallback = _fit_start_probability_model(
+                    training, minutes_feature_columns
                 )
 
     for horizon in horizons:
@@ -548,6 +712,13 @@ def train_future_gameweek_predictions(
         if target.empty:
             output[target_gameweek] = pd.DataFrame()
             continue
+        if minutes_mode == "availability_role":
+            target = _apply_live_availability_features(
+                target,
+                availability_events,
+                availability_cutoff,
+                target_gameweek,
+            )
 
         if training.empty:
             preseason = build_preseason_scores(
@@ -558,15 +729,18 @@ def train_future_gameweek_predictions(
             ).fillna(0.0)
             target["expected_points_adjusted"] = target["predicted_points"]
             target["probability_60_plus_minutes"] = 0.5
+            target["probability_start"] = 0.5
+            target["probability_substitute"] = 0.0
+            target["expected_minutes_if_start"] = 90.0
         elif projection_mode == "components":
             assert component_model is not None
             if minutes_mode == "binary":
-                minutes_model = build_minutes_classifier(feature_columns)
+                minutes_model = build_minutes_classifier(minutes_feature_columns)
                 minutes_model.fit(
-                    training[feature_columns], (training["minutes"] >= 60).astype(int)
+                    training[minutes_feature_columns], (training["minutes"] >= 60).astype(int)
                 )
                 probability_60_plus = minutes_model.predict_proba(
-                    target[feature_columns]
+                    target[minutes_feature_columns]
                 )[:, 1]
                 band_probabilities = np.column_stack(
                     [
@@ -578,7 +752,7 @@ def train_future_gameweek_predictions(
             else:
                 assert minutes_band_model is not None
                 band_probabilities = minutes_band_model.predict_proba(
-                    target[feature_columns]
+                    target[minutes_feature_columns]
                 )
                 probability_60_plus = band_probabilities[:, 2]
             component_predictions = component_model.predict_expected_points(
@@ -597,6 +771,17 @@ def train_future_gameweek_predictions(
             target["predicted_points"] = target["component_expected_points"]
             target["expected_points_adjusted"] = target["component_expected_points"]
             target["probability_60_plus_minutes"] = probability_60_plus
+            if minutes_mode == "availability_role":
+                _add_role_probability_outputs(
+                    target,
+                    band_probabilities,
+                    _start_probability(
+                        target,
+                        start_model,
+                        start_fallback,
+                        minutes_feature_columns,
+                    ),
+                )
         else:
             assert points_model is not None
             target["predicted_points"] = points_model.predict(target[feature_columns])
@@ -612,11 +797,25 @@ def train_future_gameweek_predictions(
             else:
                 assert minutes_band_model is not None
                 target["probability_60_plus_minutes"] = minutes_band_model.predict_proba(
-                    target[feature_columns]
+                    target[minutes_feature_columns]
                 )[:, 2]
                 target["expected_points_adjusted"] = minutes_band_model.predict_expected_points(
-                    target[feature_columns]
+                    target[minutes_feature_columns]
                 ).clip(0.0)
+                if minutes_mode == "availability_role":
+                    band_probabilities = minutes_band_model.predict_proba(
+                        target[minutes_feature_columns]
+                    )
+                    _add_role_probability_outputs(
+                        target,
+                        band_probabilities,
+                        _start_probability(
+                            target,
+                            start_model,
+                            start_fallback,
+                            minutes_feature_columns,
+                        ),
+                    )
 
         target["minutes_model_mode"] = minutes_mode
         target["feature_mode"] = feature_mode
@@ -627,27 +826,34 @@ def train_future_gameweek_predictions(
         )
         target["model"] = model_name if not training.empty else "Preseason heuristic"
         # Actual outcomes are deliberately excluded from the strategy-facing frame.
-        output[target_gameweek] = target[
-            [
-                "player_id",
-                "player_name",
-                "position",
-                "team",
-                "price",
-                "decision_price",
-                "gameweek",
-                "expected_points_adjusted",
-                "predicted_points",
-                "probability_60_plus_minutes",
-                "minutes_model_mode",
-                "feature_mode",
-                "projection_mode",
-                "training_row_count",
-                "max_training_current_season_gameweek",
-                "as_of_gameweek",
-                "future_target_gameweek",
-            ]
-        ].copy()
+        output_columns = [
+            "player_id",
+            "player_name",
+            "position",
+            "team",
+            "price",
+            "decision_price",
+            "gameweek",
+            "expected_points_adjusted",
+            "predicted_points",
+            "probability_60_plus_minutes",
+            "minutes_model_mode",
+            "feature_mode",
+            "projection_mode",
+            "training_row_count",
+            "max_training_current_season_gameweek",
+            "as_of_gameweek",
+            "future_target_gameweek",
+        ]
+        if minutes_mode == "availability_role":
+            output_columns.extend(
+                [
+                    "probability_start",
+                    "probability_substitute",
+                    "expected_minutes_if_start",
+                ]
+            )
+        output[target_gameweek] = target[output_columns].copy()
     return output
 
 
@@ -660,6 +866,8 @@ def train_realistic_captain_predictions(
     minutes_mode: str = "binary",
     feature_mode: str = "baseline",
     projection_mode: str = DEFAULT_PROJECTION_MODE,
+    availability_events: Iterable[AvailabilityEvent] | None = None,
+    availability_cutoff: datetime | str | None = None,
 ) -> pd.DataFrame:
     """Train a fresh point-in-time Ridge model for captain selection."""
 
@@ -667,6 +875,13 @@ def train_realistic_captain_predictions(
     target = players[(players["season"] == season) & (players["gameweek"] == gameweek)].copy()
     if target.empty:
         raise ValueError(f"No target rows for {season} GW{gameweek}")
+    if minutes_mode == "availability_role":
+        target = _apply_live_availability_features(
+            target,
+            availability_events,
+            availability_cutoff,
+            gameweek,
+        )
     if projection_mode not in PROJECTION_MODES:
         raise ValueError(
             f"projection_mode must be one of {', '.join(PROJECTION_MODES)}"
@@ -780,6 +995,9 @@ def run_season_benchmark(
     feature_mode: str = "baseline",
     projection_mode: str = DEFAULT_PROJECTION_MODE,
     chip_mode: str = CHIP_MODE_DEFAULT,
+    hit_policy: str = "current_gw",
+    availability_events: Iterable[AvailabilityEvent] | None = None,
+    availability_cutoff: datetime | str | None = None,
     prediction_cache: dict[
         tuple[str, int, str, str, str, str], tuple[pd.DataFrame, pd.DataFrame]
     ] | None = None,
@@ -794,6 +1012,12 @@ def run_season_benchmark(
 
     if chip_mode not in CHIP_MODES:
         raise ValueError(f"chip_mode must be one of {', '.join(CHIP_MODES)}")
+    if hit_policy not in HIT_POLICIES:
+        raise ValueError(f"hit_policy must be one of {', '.join(HIT_POLICIES)}")
+    if minutes_mode == "availability_role" and not set(M9_MINUTES_FEATURE_COLUMNS).issubset(
+        players.columns
+    ):
+        players = add_m9_historical_features(players)
 
     season_players = players[players["season"] == season].copy()
     gameweeks = sorted(int(value) for value in season_players["gameweek"].unique())
@@ -828,7 +1052,10 @@ def run_season_benchmark(
     rules = build_historical_season_rules(season)
     chip_state = initial_chip_state(rules)
     chip_planner = DeterministicChipPlanner()
-    beam_planner = DeterministicBeamPlanner()
+    beam_planner = DeterministicBeamPlanner(
+        hit_policy=hit_policy,
+        max_transfers=2 if hit_policy == "horizon_value" else 6,
+    )
     fixture_scenario_cache: dict[tuple[int, int], Any] = {}
     historical_raw, historical_teams = load_historical_raw([season])
 
@@ -857,6 +1084,8 @@ def run_season_benchmark(
                 minutes_mode=minutes_mode,
                 feature_mode=feature_mode,
                 projection_mode=projection_mode,
+                availability_events=availability_events,
+                availability_cutoff=availability_cutoff,
             )
             if prediction_cache is not None:
                 prediction_cache[cache_key] = (target, available_data)
@@ -874,6 +1103,8 @@ def run_season_benchmark(
                     minutes_mode=minutes_mode,
                     feature_mode=feature_mode,
                     projection_mode=projection_mode,
+                    availability_events=availability_events,
+                    availability_cutoff=availability_cutoff,
                     horizons=(
                         tuple(range(1, 9))
                         if chip_mode == CHIP_MODE_BASELINE
@@ -907,6 +1138,8 @@ def run_season_benchmark(
         pre_chip_squad = squad.copy()
         squad_before_hash = _squad_hash(pre_chip_squad)
         transfer_candidate = _empty_decision()
+        transfer_expected_horizon_gain = 0.0
+        transfer_expected_horizon_net_gain = 0.0
         post_transfer_squad = pre_chip_squad.copy()
         post_transfer_bank = bank
         post_transfer_free_transfers = free_transfers
@@ -975,6 +1208,8 @@ def run_season_benchmark(
             transfer_candidate = beam_action.transfer
             chip_definition = beam_action.chip
             chip_squad = beam_action.chip_squad
+            transfer_expected_horizon_gain = beam_action.transfer_expected_horizon_gain
+            transfer_expected_horizon_net_gain = beam_action.transfer_expected_horizon_net_gain
             if transfer_candidate.made:
                 _assert_transfer_budget(pre_chip_squad, transfer_candidate, bank)
                 post_transfer_squad = _apply_benchmark_transfer(
@@ -1082,6 +1317,8 @@ def run_season_benchmark(
                 minutes_mode=minutes_mode,
                 feature_mode=feature_mode,
                 projection_mode=projection_mode,
+                availability_events=availability_events,
+                availability_cutoff=availability_cutoff,
             )
             if captain_prediction_cache is not None:
                 captain_prediction_cache[captain_cache_key] = captain_predictions
@@ -1148,6 +1385,8 @@ def run_season_benchmark(
                 "gross_points": chip_score_points,
                 "raw_starter_points": score.raw_starter_points,
                 "hit_cost": decision.hit_cost,
+                "hit_selected": decision.hit_cost > 0,
+                "hit_break_even_cost": 4,
                 "net_points": chip_score_points - decision.hit_cost,
                 "cumulative_points": total_points,
                 "realistic_gross_points": realistic_chip_points,
@@ -1173,6 +1412,12 @@ def run_season_benchmark(
                 "incoming": decision.incoming_name,
                 "projected_gain": round(decision.projected_gain, 3),
                 "net_projected_gain": round(decision.net_projected_gain, 3),
+                "transfer_expected_horizon_gain": round(
+                    transfer_expected_horizon_gain, 4
+                ),
+                "transfer_expected_horizon_net_gain": round(
+                    transfer_expected_horizon_net_gain, 4
+                ),
                 "bank_before": round(bank_before, 1),
                 "free_transfers_before": free_transfers_before,
                 "bank_after": round(bank_after, 1),
@@ -1191,6 +1436,7 @@ def run_season_benchmark(
                     "captain_max_training_current_season_gameweek"
                 ].iloc[0],
                 "chip_mode": chip_mode,
+                "hit_policy": hit_policy,
                 "chip_key": chip_decision.chip_key,
                 "chip_selected": chip_definition is not None,
                 "chip_used": chip_decision.chip_name if chip_definition is not None else "none",
@@ -1253,6 +1499,8 @@ def run_season_benchmark(
         chip_mode=chip_mode,
         chip_points=round(chip_points, 2),
         chips_used=chips_used,
+        minutes_mode=minutes_mode,
+        hit_policy=hit_policy,
     )
     _assert_no_lookahead(result.rows, season)
     return result
@@ -1270,8 +1518,15 @@ def run_benchmark_suite(
     feature_mode: str = "baseline",
     projection_mode: str = DEFAULT_PROJECTION_MODE,
     chip_mode: str = CHIP_MODE_DEFAULT,
+    hit_policy: str = "current_gw",
+    availability_events: Iterable[AvailabilityEvent] | None = None,
+    availability_cutoff: datetime | str | None = None,
     verbose: bool = False,
 ) -> list[SeasonBenchmarkResult]:
+    if minutes_mode == "availability_role" and not set(M9_MINUTES_FEATURE_COLUMNS).issubset(
+        players.columns
+    ):
+        players = add_m9_historical_features(players)
     selected_strategies = list(
         strategies
         or (NoTransfersStrategy(), DeterministicTransferStrategy())
@@ -1297,6 +1552,9 @@ def run_benchmark_suite(
             feature_mode=feature_mode,
             projection_mode=projection_mode,
             chip_mode=chip_mode,
+            hit_policy=hit_policy,
+            availability_events=availability_events,
+            availability_cutoff=availability_cutoff,
             verbose=verbose,
             prediction_cache=prediction_cache,
             captain_prediction_cache=captain_prediction_cache,
@@ -1385,6 +1643,8 @@ def append_result_to_history(
                 "chips_used": result.chips_used,
                 "chip_points": result.chip_points,
                 "rules_version": build_historical_season_rules(result.season).rules_version,
+                "minutes_mode": result.minutes_mode,
+                "hit_policy": result.hit_policy,
             }
         ],
         columns=HISTORY_COLUMNS,
@@ -1422,6 +1682,18 @@ def append_decision_rows_to_history(
         raise ValueError("run_id must be a non-empty identifier")
     decision_path = history_path.with_name(f"{history_path.stem}_decisions.csv")
     rows = result.rows.copy()
+    for column, value in (
+        ("season", result.season),
+        ("strategy_name", result.strategy_name),
+    ):
+        if column not in rows.columns:
+            rows.insert(0, column, value)
+    required_columns = {"season", "strategy_name", "gameweek"}
+    missing_columns = sorted(required_columns.difference(rows.columns))
+    if missing_columns:
+        raise ValueError(
+            "Decision rows are missing required columns: " + ", ".join(missing_columns)
+        )
     rows.insert(0, "run_id", run_id)
     rows.insert(1, "variant_name", variant_name)
     rows.insert(2, "commit_hash", commit_hash)
@@ -1622,6 +1894,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", default=DEFAULT_MODEL, choices=tuple(MODEL_BUILDERS))
     parser.add_argument("--model-version", default=DEFAULT_MODEL_VERSION)
+    parser.add_argument(
+        "--minutes-mode",
+        choices=("binary", "conditional_bands", "availability_role"),
+        default="binary",
+    )
+    parser.add_argument("--hit-policy", choices=HIT_POLICIES, default="current_gw")
     parser.add_argument("--chip-mode", choices=CHIP_MODES, default=CHIP_MODE_DEFAULT)
     parser.add_argument("--history-path", type=Path, default=HISTORY_PATH)
     parser.add_argument("--verbose", action="store_true")
@@ -1644,6 +1922,8 @@ def main() -> None:
         strategies=strategies,
         model_name=args.model,
         model_version=args.model_version,
+        minutes_mode=args.minutes_mode,
+        hit_policy=args.hit_policy,
         chip_mode=args.chip_mode,
         verbose=args.verbose,
     )

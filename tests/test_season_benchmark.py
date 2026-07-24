@@ -290,6 +290,52 @@ def test_component_projection_is_selectable_without_changing_control_default():
     assert control_target["model"].eq("Ridge Regression").all()
 
 
+def test_availability_role_mode_exposes_point_in_time_role_probabilities():
+    players = load_historical_player_gameweeks()
+    target, training = train_gameweek_predictions(
+        players,
+        "2024-25",
+        10,
+        minutes_mode="availability_role",
+    )
+
+    assert not training.empty
+    assert target["minutes_model_mode"].eq("availability_role").all()
+    assert target["probability_start"].between(0, 1).all()
+    assert target["probability_substitute"].between(0, 1).all()
+    assert target["probability_60_plus_minutes"].between(0, 1).all()
+    assert target["expected_minutes_if_start"].between(0, 90).all()
+    assert int(training[training["season"] == "2024-25"]["gameweek"].max()) == 9
+
+
+def test_future_availability_role_predictions_freeze_role_features_at_decision():
+    players = load_historical_player_gameweeks()
+    original = train_future_gameweek_predictions(
+        players,
+        "2024-25",
+        10,
+        minutes_mode="availability_role",
+        horizons=(1, 2),
+    )
+    mutated = players.copy()
+    future_mask = (mutated["season"] == "2024-25") & (mutated["gameweek"] > 10)
+    mutated.loc[future_mask, "minutes"] = 9999.0
+    changed = train_future_gameweek_predictions(
+        mutated,
+        "2024-25",
+        10,
+        minutes_mode="availability_role",
+        horizons=(1, 2),
+    )
+
+    for gameweek in (11, 12):
+        pd.testing.assert_series_equal(
+            original[gameweek].set_index("player_id")["expected_minutes_if_start"].sort_index(),
+            changed[gameweek].set_index("player_id")["expected_minutes_if_start"].sort_index(),
+            check_names=False,
+        )
+
+
 def test_invalid_transfer_decision_is_represented_explicitly():
     decision = TransferDecision(
         outgoing_id=1,

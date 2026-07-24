@@ -30,6 +30,8 @@ from fpl_intelligence.chip_simulation import (
 from fpl_intelligence.season_rules import SeasonRules
 from fpl_intelligence.squad_optimizer import VALID_FORMATIONS
 
+HIT_POLICIES = ("current_gw", "horizon_value")
+
 
 @dataclass(frozen=True)
 class DecisionState:
@@ -65,6 +67,9 @@ class BeamAction:
     no_chip_horizon_points: float = 0.0
     future_opportunity_cost: float = 0.0
     uncertainty_penalty: float = 0.0
+    transfer_expected_horizon_gain: float = 0.0
+    transfer_expected_horizon_net_gain: float = 0.0
+    hit_policy: str = "current_gw"
 
 
 @dataclass(frozen=True)
@@ -80,12 +85,22 @@ class DeterministicBeamPlanner:
     name = "deterministic-beam-search"
     version = "m8-beam-v1"
 
-    def __init__(self, *, beam_width: int = 6, horizon: int = 3, max_transfers: int = 6):
+    def __init__(
+        self,
+        *,
+        beam_width: int = 6,
+        horizon: int = 3,
+        max_transfers: int = 6,
+        hit_policy: str = "current_gw",
+    ):
         if beam_width < 1 or horizon < 1 or max_transfers < 1:
             raise ValueError("beam_width, horizon, and max_transfers must be positive")
+        if hit_policy not in HIT_POLICIES:
+            raise ValueError(f"hit_policy must be one of {', '.join(HIT_POLICIES)}")
         self.beam_width = beam_width
         self.horizon = horizon
         self.max_transfers = max_transfers
+        self.hit_policy = hit_policy
         self._chip_squad_cache: dict[tuple[Any, ...], pd.DataFrame] = {}
         self._projection_cache: dict[int, dict[int, float]] = {}
         self.last_counterfactuals: tuple[BeamAction, ...] = ()
@@ -168,6 +183,8 @@ class DeterministicBeamPlanner:
             for gameweek, frame in frames.items()
             if gameweek > state.gameweek
         }
+        is_first_action = state.first_action is None
+        ranking_mode = self.hit_policy if is_first_action else "current_gw"
         transfer_options = (
             [_empty_transfer_decision()]
             if state.gameweek == 1
@@ -176,7 +193,9 @@ class DeterministicBeamPlanner:
                 predictions,
                 bank=state.bank,
                 free_transfers=state.free_transfers,
-                max_options=self.max_transfers,
+                max_options=self.max_transfers if is_first_action else 6,
+                future_predictions=future,
+                ranking_mode=ranking_mode,
             )
         )
         chips: list[ChipDefinition | None] = [None]
@@ -293,7 +312,20 @@ class DeterministicBeamPlanner:
 
         projection = self._projection_for(predictions)
         base_value, lineup, captain, bench = _fast_gameweek_value(active_squad, projection)
+        before_value = _fast_gameweek_value(before_squad, projection)[0]
         no_chip_value = _fast_gameweek_value(after_transfer, projection)[0]
+        current_transfer_gain = no_chip_value - before_value
+        is_first_action = state.first_action is None
+        transfer_horizon_gain = (
+            _transfer_horizon_gain(
+                before_squad,
+                after_transfer,
+                projection,
+                future,
+            )
+            if is_first_action
+            else 0.0
+        )
         chip_value = 0.0
         if chip is not None and chip.name == "bboost":
             chip_value = bench
@@ -302,7 +334,6 @@ class DeterministicBeamPlanner:
         elif chip is not None and chip.name == "assistant_manager":
             chip_value = _assistant_manager_expected_points(predictions) or 0.0
         expected_points = base_value + chip_value
-        is_first_action = state.first_action is None
         if is_first_action:
             future_squads = (
                 retained_squad
@@ -314,6 +345,8 @@ class DeterministicBeamPlanner:
                 if chip is not None and chip.name == "wildcard"
                 else 3
                 if chip is not None and chip.name in {"freehit", "bboost", "3xc"}
+                else max(self.horizon, 3)
+                if self.hit_policy == "horizon_value"
                 else self.horizon
             )
             future_frames = [
@@ -365,6 +398,16 @@ class DeterministicBeamPlanner:
             - opportunity_cost
             + flexibility_value
         )
+        if (
+            self.hit_policy == "horizon_value"
+            and is_first_action
+            and hit_cost > 0
+        ):
+            future_incremental_gain = max(
+                0.0,
+                transfer_horizon_gain - current_transfer_gain,
+            )
+            branch_score += future_incremental_gain
         if chip is not None and chip.name == "freehit":
             next_squad = retained_squad.copy()
         else:
@@ -382,6 +425,9 @@ class DeterministicBeamPlanner:
             no_chip_horizon_points=no_chip_horizon,
             future_opportunity_cost=opportunity_cost,
             uncertainty_penalty=uncertainty,
+            transfer_expected_horizon_gain=transfer_horizon_gain,
+            transfer_expected_horizon_net_gain=transfer_horizon_gain - hit_cost,
+            hit_policy=self.hit_policy,
         )
         return replace(
             state,
@@ -414,11 +460,15 @@ def generate_transfer_options(
     bank: float,
     free_transfers: int,
     max_options: int = 8,
+    future_predictions: dict[int, pd.DataFrame] | None = None,
+    ranking_mode: str = "current_gw",
 ) -> list[TransferDecision]:
     """Generate deterministic no-transfer and legal one-transfer branches."""
 
     if predictions.empty:
         return [_empty_transfer_decision()]
+    if ranking_mode not in HIT_POLICIES:
+        raise ValueError(f"ranking_mode must be one of {', '.join(HIT_POLICIES)}")
     projection = _projection_map(predictions)
     candidates = predictions.copy()
     if "decision_price" not in candidates:
@@ -458,7 +508,29 @@ def generate_transfer_options(
                 outgoing_price=float(outgoing.price),
                 incoming_price=incoming_price,
             )
-            options.append((decision.net_projected_gain, -incoming_id, -outgoing_id, decision))
+            options.append(
+                (decision.net_projected_gain, -incoming_id, -outgoing_id, decision)
+            )
+    if ranking_mode == "horizon_value" and future_predictions:
+        # Horizon valuation is much more expensive than legal candidate
+        # generation. Keep a deterministic immediate-value shortlist before
+        # evaluating full-XI/captain value across future Gameweeks.
+        options.sort(key=lambda value: value[:3], reverse=True)
+        shortlist = options[: max_options * 3]
+        rescored: list[tuple[float, int, int, TransferDecision]] = []
+        for _, incoming_key, outgoing_key, decision in shortlist:
+            after_transfer = _apply_transfer(squad, predictions, decision)
+            horizon_net_gain = (
+                _transfer_horizon_gain(
+                    squad,
+                    after_transfer,
+                    projection,
+                    future_predictions,
+                )
+                - hit_cost
+            )
+            rescored.append((horizon_net_gain, incoming_key, outgoing_key, decision))
+        options = rescored
     options.sort(key=lambda value: value[:3], reverse=True)
     return [_empty_transfer_decision(), *(value[3] for value in options[:max_options])]
 
@@ -480,6 +552,25 @@ def _apply_transfer(
     if violations:
         raise ValueError("Beam transfer produced an invalid squad: " + "; ".join(violations))
     return updated
+
+
+def _transfer_horizon_gain(
+    before_squad: pd.DataFrame,
+    after_squad: pd.DataFrame,
+    current_projection: dict[int, float],
+    future_predictions: dict[int, pd.DataFrame],
+) -> float:
+    """Estimate the full-XI/captain value of a transfer over available horizons."""
+
+    gain = _fast_gameweek_value(after_squad, current_projection)[0] - _fast_gameweek_value(
+        before_squad, current_projection
+    )[0]
+    for frame in future_predictions.values():
+        projection = _projection_map(frame)
+        gain += _fast_gameweek_value(after_squad, projection)[0] - _fast_gameweek_value(
+            before_squad, projection
+        )[0]
+    return float(gain)
 
 
 def _captain_ids(
@@ -682,6 +773,11 @@ def _future_score_by_player(
 ) -> dict[int, float]:
     scores: dict[int, float] = {}
     for frame in future_predictions.values():
+        if frame.empty or not {
+            "player_id",
+            "expected_points_adjusted",
+        }.issubset(frame.columns):
+            continue
         for row in frame[["player_id", "expected_points_adjusted"]].itertuples(index=False):
             player_id = int(row.player_id)
             scores[player_id] = scores.get(player_id, 0.0) + float(

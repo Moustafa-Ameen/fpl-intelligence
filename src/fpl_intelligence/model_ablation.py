@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from fpl_intelligence.season_benchmark import (
+    CHIP_MODE_NONE,
     DEFAULT_BENCHMARK_SEASONS,
     DEFAULT_MODEL,
     HISTORY_PATH,
@@ -31,6 +32,7 @@ from fpl_intelligence.season_benchmark import (
     DeterministicTransferStrategy,
     NoTransfersStrategy,
     SeasonBenchmarkResult,
+    append_decision_rows_to_history,
     append_result_to_history,
     get_git_commit,
     run_season_benchmark,
@@ -195,6 +197,7 @@ class MultiSeasonAblationResult:
     season_results: dict[tuple[str, str, str], SeasonBenchmarkResult] = field(default_factory=dict)
     run_id: str | None = None
     history_path: Path | None = None
+    decision_history_path: Path | None = None
 
 
 def dc_data_state(
@@ -291,6 +294,7 @@ def run_multi_season_ablation(
     run_id: str | None = None,
     commit_hash: str | None = None,
     optimizer_version: str = OPTIMIZER_VERSION,
+    chip_mode: str = CHIP_MODE_NONE,
 ) -> MultiSeasonAblationResult:
     """Run registered variants and optionally persist one canonical suite."""
 
@@ -366,6 +370,7 @@ def run_multi_season_ablation(
                     strategy,
                     model_name=model_name,
                     max_free_transfers=max_free_transfers,
+                    chip_mode=chip_mode,
                     prediction_cache=prediction_cache,
                     captain_prediction_cache=captain_prediction_cache,
                     future_prediction_cache=future_prediction_cache,
@@ -393,15 +398,26 @@ def run_multi_season_ablation(
     if persist:
         assert history_path is not None
         assert run_id is not None
+        decision_history_path: Path | None = None
         for variant_name, season, strategy_name in season_results:
+            result = season_results[(variant_name, season, strategy_name)]
             append_result_to_history(
-                season_results[(variant_name, season, strategy_name)],
+                result,
                 history_path=history_path,
                 variant_name=variant_name,
                 run_id=run_id,
                 commit_hash=commit_hash or "unavailable",
                 optimizer_version=optimizer_version,
             )
+            decision_history_path = append_decision_rows_to_history(
+                result,
+                history_path=history_path,
+                variant_name=variant_name,
+                run_id=run_id,
+                commit_hash=commit_hash or "unavailable",
+            )
+    else:
+        decision_history_path = None
 
     return MultiSeasonAblationResult(
         comparison=pd.DataFrame(comparison_rows),
@@ -414,6 +430,7 @@ def run_multi_season_ablation(
         season_results=season_results,
         run_id=run_id,
         history_path=history_path if persist else None,
+        decision_history_path=decision_history_path,
     )
 
 

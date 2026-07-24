@@ -65,6 +65,7 @@ RELEVANT_COLUMN_EXPLANATIONS = {
         "such as historical GW1."
     ),
     "minutes": "Actual minutes played in the target gameweek.",
+    "starts": "Number of fixtures started in the target gameweek.",
     "total_points": "Actual FPL points scored in the target gameweek.",
     "minutes_last_3": "Sum of minutes from the player's previous three gameweeks only.",
     "points_last_3": "Sum of points from the player's previous three gameweeks only.",
@@ -302,6 +303,7 @@ def aggregate_fixture_rows_to_gameweeks(fixture_rows: pd.DataFrame) -> pd.DataFr
             team_clean_sheet=("team_clean_sheet", "min"),
             selected_by_percent=("selected_by_percent", "max"),
             minutes=("minutes", "sum"),
+            starts=("starts", "sum"),
             total_points=("total_points", "sum"),
             next_gameweek_points=("next_gameweek_points", "sum"),
             expected_goals=("expected_goals", sum_with_min_count),
@@ -329,6 +331,9 @@ def aggregate_fixture_rows_to_gameweeks(fixture_rows: pd.DataFrame) -> pd.DataFr
 
 def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFrame) -> pd.DataFrame:
     source = deduplicate_exact_fixture_rows(gameweeks)
+    if "starts" not in source:
+        source["starts"] = pd.NA
+    source["starts"] = pd.to_numeric(source["starts"], errors="coerce")
     for column in ADVANCED_STAT_COLUMNS:
         if column not in source:
             source[column] = pd.NA
@@ -396,6 +401,7 @@ def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFra
         "team_clean_sheet",
         "selected_by_percent",
         "minutes",
+        "starts",
         "total_points",
         "next_gameweek_points",
         "expected_goals",
@@ -465,6 +471,7 @@ def build_historical_player_gameweeks(gameweeks: pd.DataFrame, teams: pd.DataFra
         "bps_rule_version",
         "dc_data_available",
         "minutes",
+        "starts",
         "total_points",
         "next_gameweek_points",
     ]
